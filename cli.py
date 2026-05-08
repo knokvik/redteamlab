@@ -152,9 +152,16 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
     report_path = pipeline.get("report", {}).get("report_path")
     attacks = pipeline.get("attacks", {}).get("attempts", [])
     fallback_used = bool(pipeline.get("attacks", {}).get("fallback_used", False))
+    attack_context = pipeline.get("attacks", {}).get("attack_context", {})
+    phases_executed = pipeline.get("attacks", {}).get("phases_executed", [])
+    findings_count = pipeline.get("report", {}).get("findings_count", 0)
+    hybrid_cvss = pipeline.get("report", {}).get("hybrid_cvss", 0.0)
     llm_used = sum(1 for a in attacks if a.get("source") == "remote-ollama")
     fallback_count = sum(1 for a in attacks if str(a.get("source", "")).startswith("fallback:"))
     top_cpu = pipeline.get("observability", {}).get("summary", {}).get("max_cpu_percent", 0.0)
+    vuln_count = len(attack_context.get("vulnerabilities", []))
+    paths_found = len(attack_context.get("discovered_paths", []))
+    ports_found = len(attack_context.get("open_ports", []))
     seed_note = (
         f"Seeded {seed_result.get('db_type')} in {seed_result.get('service')}"
         if seed_result.get("seeded")
@@ -168,13 +175,17 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
                 [
                     f"Mode: [bold]{mode}[/bold]",
                     f"Target URL: [bold]{pipeline.get('target_url', 'n/a')}[/bold]",
-                    f"Fallback used: [bold]{fallback_used}[/bold]",
-                    f"LLM suggestions: [bold]{llm_used}[/bold] | fallback suggestions: [bold]{fallback_count}[/bold]",
-                    f"Peak CPU observed: [bold]{round(float(top_cpu), 2)}%[/bold]",
+                    f"Phases: [bold]{' → '.join(phases_executed) or 'none'}[/bold]",
+                    f"Total attempts: [bold]{len(attacks)}[/bold]",
+                    f"Hybrid CVSS: [bold]{hybrid_cvss}[/bold]",
+                    f"Findings: [bold]{findings_count}[/bold] | Vulnerabilities: [bold]{vuln_count}[/bold]",
+                    f"Paths discovered: [bold]{paths_found}[/bold] | Ports found: [bold]{ports_found}[/bold]",
+                    f"LLM suggestions: [bold]{llm_used}[/bold] | fallback: [bold]{fallback_count}[/bold]",
+                    f"Peak CPU: [bold]{round(float(top_cpu), 2)}%[/bold]",
                     f"Report: [bold]{report_path or 'not generated'}[/bold]",
                 ]
             ),
-            title="Run Summary",
+            title="DevRedTeam Run Summary",
             border_style="green",
         )
     )
