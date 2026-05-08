@@ -14,6 +14,8 @@ It keeps the original hardened foundation intact:
 cd /Users/nirajrajendranaphade/Programming/redteamlab/devredteam
 pip install -r requirements.txt
 python cli.py run https://github.com/knokvik/portfolio
+# or:
+./run.sh https://github.com/knokvik/portfolio
 ```
 
 ## Run Modes
@@ -28,6 +30,12 @@ Aggressive mode:
 
 ```bash
 python cli.py run https://github.com/knokvik/portfolio --aggressive
+```
+
+Skip image rebuild when images already exist:
+
+```bash
+python cli.py run https://github.com/knokvik/portfolio --no-build
 ```
 
 Both modes run the full flow:
@@ -65,6 +73,22 @@ export OLLAMA_MODEL=llama3.1:8b
 ```
 
 If Ollama is unavailable or returns invalid JSON, DevRedTeam automatically falls back to deterministic localhost-safe attack suggestions so runs do not fail.
+
+## Docker Buildx Permission Issue (Optional Local Repair)
+
+If Docker fails with `buildx` + `operation not permitted`, run:
+
+```bash
+docker builder prune -af
+rm -rf ~/.docker/buildx
+python3 cli.py run https://github.com/knokvik/portfolio
+```
+
+If images were already built previously, you can bypass rebuild:
+
+```bash
+python3 cli.py run https://github.com/knokvik/portfolio --no-build
+```
 
 ## Monitoring URLs
 
