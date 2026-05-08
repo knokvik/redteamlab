@@ -2,3 +2,4 @@
 .pycache/
 temp_repo/
 docker/docker-compose.generated.yml
+.devredteam_git/
