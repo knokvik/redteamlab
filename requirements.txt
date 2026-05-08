@@ -1,3 +1,5 @@
 docker
 pyyaml
 rich
+gitpython
+jinja2

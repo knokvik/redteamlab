@@ -1,0 +1,50 @@
+{
+  "technologies": [
+    {
+      "name": "vite-react",
+      "role": "frontend",
+      "match": {
+        "all_files": ["package.json", "vite.config.js"],
+        "any_package_deps": ["vite", "react"]
+      }
+    },
+    {
+      "name": "nextjs",
+      "role": "frontend",
+      "match": {
+        "any_files": ["next.config.js", "next.config.mjs"],
+        "any_package_deps": ["next"]
+      }
+    },
+    {
+      "name": "fastapi",
+      "role": "backend",
+      "match": {
+        "any_files": ["requirements.txt", "pyproject.toml"],
+        "any_text": ["fastapi"]
+      }
+    },
+    {
+      "name": "node-backend",
+      "role": "backend",
+      "match": {
+        "all_files": ["package.json"],
+        "any_package_deps": ["express", "fastify", "koa", "nestjs"]
+      }
+    },
+    {
+      "name": "postgres",
+      "role": "database",
+      "match": {
+        "any_text": ["postgres", "postgresql"]
+      }
+    },
+    {
+      "name": "mysql",
+      "role": "database",
+      "match": {
+        "any_text": ["mysql", "mariadb"]
+      }
+    }
+  ]
+}

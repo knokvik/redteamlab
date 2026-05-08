@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/docker/docker-compose.yml"
 PROJECT_NAME="devredteam"
+TARGET_REPO_URL="${1:-}"
 
 if ! docker info >/dev/null 2>&1; then
   echo "Docker daemon is not running or not reachable."
@@ -18,12 +19,22 @@ if ! docker plugin ls --format '{{.Name}}' | grep -Eq '^loki(:|$)'; then
 fi
 
 echo "Starting DevRedTeam lab stack..."
+if [[ -n "${TARGET_REPO_URL}" ]]; then
+  if python3 -c 'import docker, yaml, rich, git' >/dev/null 2>&1; then
+    python3 "${PROJECT_ROOT}/cli.py" run "${TARGET_REPO_URL}" --project-name "${PROJECT_NAME}"
+    exit $?
+  fi
+
+  echo "Python dependencies missing. Install with: pip install -r ${PROJECT_ROOT}/requirements.txt"
+  exit 1
+fi
+
 docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d --build --remove-orphans
 
 # Orchestrator uses Docker SDK to validate attacker reachability to targets.
 if python3 -c 'import docker, yaml, rich' >/dev/null 2>&1; then
   python3 "${PROJECT_ROOT}/core/orchestrator.py" \
-    --compose-file "${COMPOSE_FILE}" \
+    --compose-files "${COMPOSE_FILE}" \
     --project-name "${PROJECT_NAME}" \
     --skip-compose-up
 else

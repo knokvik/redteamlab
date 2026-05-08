@@ -1,4 +1,4 @@
-"""Simple lab orchestrator for the Docker-based red-team foundation."""
+"""Start Docker compose stacks and verify attacker connectivity to victim services."""
 
 from __future__ import annotations
 
@@ -19,9 +19,10 @@ console = Console()
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Start lab services and verify attacker connectivity.")
     parser.add_argument(
-        "--compose-file",
-        default=str(Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml"),
-        help="Path to docker-compose.yml",
+        "--compose-files",
+        nargs="+",
+        default=[str(Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml")],
+        help="One or more compose files (later files override earlier files).",
     )
     parser.add_argument("--project-name", default="devredteam", help="Docker Compose project name")
     parser.add_argument(
@@ -34,7 +35,15 @@ def parse_args() -> argparse.Namespace:
 
 def load_compose(compose_file: Path) -> Dict:
     with compose_file.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        return yaml.safe_load(handle) or {}
+
+
+def merge_service_views(compose_files: List[Path]) -> Dict:
+    merged: Dict = {"services": {}}
+    for compose_file in compose_files:
+        doc = load_compose(compose_file)
+        merged["services"].update(doc.get("services", {}))
+    return merged
 
 
 def resolve_container_name(project: str, service_name: str, service_cfg: Dict) -> str:
@@ -44,23 +53,15 @@ def resolve_container_name(project: str, service_name: str, service_cfg: Dict) -
     return f"{project}-{service_name}-1"
 
 
-def compose_up(compose_file: Path, project_name: str) -> None:
+def compose_up(compose_files: List[Path], project_name: str) -> None:
     console.print("[bold cyan]Bringing up lab stack with docker compose...[/bold cyan]")
-    subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-p",
-            project_name,
-            "-f",
-            str(compose_file),
-            "up",
-            "-d",
-            "--build",
-            "--remove-orphans",
-        ],
-        check=True,
-    )
+
+    cmd = ["docker", "compose", "-p", project_name]
+    for compose_file in compose_files:
+        cmd.extend(["-f", str(compose_file)])
+    cmd.extend(["up", "-d", "--build", "--remove-orphans"])
+
+    subprocess.run(cmd, check=True)
 
 
 def ensure_running(client: docker.DockerClient, container_name: str) -> docker.models.containers.Container:
@@ -125,25 +126,26 @@ def run_connectivity_checks(
     return failures
 
 
-def main() -> int:
-    args = parse_args()
-    compose_file = Path(args.compose_file).resolve()
+def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", skip_compose_up: bool = False) -> int:
+    resolved_compose_files = [Path(path).resolve() for path in compose_files]
 
-    if not compose_file.exists():
-        console.print(f"[red]Compose file not found:[/red] {compose_file}")
-        return 1
+    for compose_file in resolved_compose_files:
+        if not compose_file.exists():
+            console.print(f"[red]Compose file not found:[/red] {compose_file}")
+            return 1
 
-    compose = load_compose(compose_file)
-    services = compose.get("services", {})
+    merged_compose = merge_service_views(resolved_compose_files)
+    services = merged_compose.get("services", {})
     if "attacker" not in services:
         console.print("[red]Compose file must define an 'attacker' service.[/red]")
         return 1
 
-    if not args.skip_compose_up:
-        compose_up(compose_file, args.project_name)
+    if not skip_compose_up:
+        compose_up(resolved_compose_files, project_name)
 
     client = docker.from_env()
-    attacker_container_name = resolve_container_name(args.project_name, "attacker", services["attacker"])
+    attacker_container_name = resolve_container_name(project_name, "attacker", services["attacker"])
+
     targets = discover_targets(services)
     if not targets:
         console.print("[yellow]No victim target services discovered in compose file.[/yellow]")
@@ -154,7 +156,7 @@ def main() -> int:
         attacker_container_name=attacker_container_name,
         target_names=targets,
         services=services,
-        project_name=args.project_name,
+        project_name=project_name,
     )
 
     if failures:
@@ -163,6 +165,15 @@ def main() -> int:
 
     console.print("[bold green]Lab is up. Attacker can reach target services.[/bold green]")
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+    return run_lab(
+        compose_files=args.compose_files,
+        project_name=args.project_name,
+        skip_compose_up=args.skip_compose_up,
+    )
 
 
 if __name__ == "__main__":

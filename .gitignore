@@ -1,0 +1,4 @@
+.venv/
+.pycache/
+temp_repo/
+docker/docker-compose.generated.yml
