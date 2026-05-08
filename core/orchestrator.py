@@ -18,7 +18,7 @@ from rich.table import Table
 
 from core.attack_orchestrator import run_attack_loop
 from core.observability import ObservabilityCollector
-from core.playwright_crawler import crawl_and_build_graph, select_primary_target_url
+from core.playwright_crawler import crawl_and_build_graph, discover_target_urls, select_primary_target_url
 from core.report_generator import generate_report
 
 console = Console()
@@ -183,12 +183,18 @@ def run_attack_intelligence_pipeline(
     mode: str = "safe",
     repo_url: str = "",
     repo_name: str = "",
+    stack_snapshot: Dict | None = None,
 ) -> Dict:
     compose_path = Path(compose_file).resolve()
     report_dir = Path(reports_dir) if reports_dir else Path(__file__).resolve().parents[1] / "reports"
     repo_slug = repo_name or re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1]) or "repo"
 
     run_id = f"run-{uuid.uuid4().hex[:12]}"
+    stack_snapshot = stack_snapshot or {}
+    discovered_targets = discover_target_urls(compose_path)
+    target_urls = [item.url for item in discovered_targets]
+    if not target_urls:
+        target_urls = ["http://localhost:9700"]
     base_url = select_primary_target_url(compose_path)
     console.print(f"[bold cyan]Playwright target URL:[/bold cyan] {base_url}")
 
@@ -204,7 +210,14 @@ def run_attack_intelligence_pipeline(
             "graph": {"nodes": [], "edges": []},
         }
 
-    collector = ObservabilityCollector(project_name=project_name, sample_interval_s=2)
+    db_info = stack_snapshot.get("database", {}) if isinstance(stack_snapshot, dict) else {}
+    db_type = db_info.get("type") if isinstance(db_info, dict) else None
+    collector = ObservabilityCollector(
+        project_name=project_name,
+        sample_interval_s=2,
+        db_type=db_type,
+        db_service_name="target-db",
+    )
     collector.start()
     try:
         try:
@@ -215,6 +228,8 @@ def run_attack_intelligence_pipeline(
                 project_name=project_name,
                 attempts=attempts,
                 mode=mode,
+                stack_snapshot=stack_snapshot,
+                target_urls=target_urls,
             )
         except Exception as exc:
             attack_result = {
@@ -236,6 +251,8 @@ def run_attack_intelligence_pipeline(
             mode=mode,
             run_id=run_id,
             target_url=base_url,
+            target_urls=target_urls,
+            stack_snapshot=stack_snapshot,
             crawl_result=crawl_result,
             attack_result=attack_result,
             observability_result=observability_result,
@@ -268,6 +285,8 @@ def run_attack_intelligence_pipeline(
     return {
         "run_id": run_id,
         "target_url": base_url,
+        "target_urls": target_urls,
+        "stack": stack_snapshot,
         "crawl": crawl_result,
         "attacks": attack_result,
         "observability": observability_result,
