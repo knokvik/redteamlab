@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DevRedTeam Report - {{ run.repo_name }}</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --danger: #b91c1c;
+      --border: #e5e7eb;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #f8fafc, #eef2ff);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      background: linear-gradient(140deg, #0f766e, #0b4f73);
+      color: #fff;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      letter-spacing: 0.2px;
+    }
+    .hero p { margin: 0; opacity: 0.92; }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .meta-item {
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 22px;
+    }
+    .muted { color: var(--muted); }
+    .badge {
+      display: inline-block;
+      padding: 7px 12px;
+      border-radius: 999px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .score-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chip {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 13px;
+      background: #f8fafc;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 9px;
+      vertical-align: top;
+    }
+    th {
+      background: #f9fafb;
+      font-weight: 700;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #0b1020;
+      color: #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 220px;
+      overflow: auto;
+      font-size: 12px;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      background: #eef2f7;
+      border-radius: 6px;
+      padding: 2px 4px;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+    .btn {
+      display: inline-block;
+      background: #111827;
+      color: #fff;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 9px;
+      font-weight: 700;
+    }
+    .tiny { font-size: 12px; }
+    .ok { color: #15803d; }
+    .bad { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="hero">
+      <h1>DevRedTeam Simulation Report</h1>
+      <p>Professional impact report for automated red-team run.</p>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Repository</strong><br />{{ run.repo_url }}</div>
+        <div class="meta-item"><strong>Run Time</strong><br />{{ run.generated_at }}</div>
+        <div class="meta-item"><strong>Mode</strong><br />{{ run.mode }}</div>
+        <div class="meta-item"><strong>Target URL</strong><br />{{ run.target_url }}</div>
+        <div class="meta-item"><strong>Run ID</strong><br />{{ run.run_id }}</div>
+        <div class="meta-item"><strong>Compose File</strong><br /><span class="tiny">{{ run.compose_file }}</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Hybrid CVSS</h2>
+      <div class="score-row">
+        <span class="badge" style="background: {{ cvss.badge_color }}">Hybrid CVSS {{ cvss.hybrid }}</span>
+        <span class="chip">Base CVSS: {{ cvss.base }}</span>
+        <span class="chip">Behavior Impact: {{ cvss.behavior }}</span>
+      </div>
+      <p class="muted">Formula used: <code>(base_cvss * 0.6) + (behavior_impact * 0.4)</code></p>
+      <p>{{ cvss.explanation }}</p>
+    </section>
+
+    <section class="card">
+      <h2>Attack Timeline</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Timestamp</th>
+            <th>Tool</th>
+            <th>Payload</th>
+            <th>Command</th>
+            <th>X-RedTeam-ID</th>
+            <th>Status</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in timeline %}
+          <tr>
+            <td>{{ row.attempt }}</td>
+            <td>{{ row.timestamp }}</td>
+            <td><code>{{ row.tool }}</code></td>
+            <td><code>{{ row.payload }}</code></td>
+            <td><code>{{ row.command }}</code></td>
+            <td><code>{{ row.id }}</code></td>
+            <td>{% if row.success %}<span class="ok">success</span>{% else %}<span class="bad">failed</span>{% endif %}</td>
+            <td>{{ row.source }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Observed Real Impact</h2>
+      <p class="muted">Correlated container spikes and recent log excerpts captured during attack execution.</p>
+      {{ metrics_chart_html | safe }}
+      <div class="two-col" style="margin-top: 12px;">
+        <div>
+          <h3>Metric Summary</h3>
+          <ul>
+            <li>Max CPU: <strong>{{ impact.max_cpu_percent }}%</strong></li>
+            <li>Avg CPU: <strong>{{ impact.avg_cpu_percent }}%</strong></li>
+            <li>Max Memory: <strong>{{ impact.max_memory_mb }} MB</strong></li>
+            <li>Sample Count: <strong>{{ impact.sample_count }}</strong></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Correlated Log Excerpts</h3>
+          <pre>{{ impact.log_excerpt }}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Attack Graph (Before / After)</h2>
+      <div class="two-col">
+        <div>
+          <h3>Before</h3>
+          {{ graph_before_html | safe }}
+        </div>
+        <div>
+          <h3>After</h3>
+          {{ graph_after_html | safe }}
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Prioritized Fix Suggestions</h2>
+      <ol>
+        {% for fix in fixes %}
+        <li>{{ fix }}</li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    <section class="card">
+      <h2>Run Outputs</h2>
+      <p>Artifacts for this run are stored in this directory:</p>
+      <p><code>{{ run.report_dir }}</code></p>
+      <a class="btn" href="{{ run.self_uri }}" target="_blank" rel="noopener">Open in Browser</a>
+    </section>
+  </div>
+</body>
+</html>
