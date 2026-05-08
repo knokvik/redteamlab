@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List
+from urllib.parse import quote_plus
 
 import docker
 
@@ -50,6 +49,7 @@ def run_attack_loop(
     observability_collector,
     project_name: str,
     attempts: int = 4,
+    mode: str = "safe",
 ) -> Dict:
     if not _is_localhost_url(base_url):
         raise ValueError(f"Refusing non-localhost target: {base_url}")
@@ -59,6 +59,7 @@ def run_attack_loop(
     llm = RemoteLLMClient()
 
     results: List[Dict] = []
+    fallback_used = False
 
     for idx in range(1, attempts + 1):
         attempt_id = f"rt-{uuid.uuid4().hex[:10]}"
@@ -68,7 +69,10 @@ def run_attack_loop(
             observability_snapshot=snapshot.get("summary", {}),
             attempt_idx=idx,
             base_url=base_url,
+            mode=mode,
         )
+        if suggestion.source.startswith("fallback:"):
+            fallback_used = True
 
         tool = suggestion.tool.lower().strip()
         command_used = ""
@@ -102,7 +106,8 @@ def run_attack_loop(
             success = cmd_result["exit_code"] == 0
         else:
             # Fallback probe when tool missing/unavailable.
-            command_used = f"curl -sk -H 'X-RedTeam-ID: {attempt_id}' '{base_url}/?q={suggestion.payload}'"
+            safe_payload = quote_plus(suggestion.payload)
+            command_used = f"curl -sk -H 'X-RedTeam-ID: {attempt_id}' '{base_url}/?q={safe_payload}'"
             cmd_result = _run_in_attacker(client, attacker_name, command_used)
             output = cmd_result["output"]
             success = cmd_result["exit_code"] == 0
@@ -112,6 +117,7 @@ def run_attack_loop(
                 "attempt": idx,
                 "id": attempt_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mode": mode,
                 "tool": tool,
                 "source": suggestion.source,
                 "plan": suggestion.plan,
@@ -122,4 +128,4 @@ def run_attack_loop(
             }
         )
 
-    return {"attempts": results}
+    return {"attempts": results, "fallback_used": fallback_used}
