@@ -1,0 +1,150 @@
+# Merged compose inspired by:
+# - pentest_lab: static-IP private network + monitoring stack + labels/logging pattern
+# - pack2theroot-lab: attacker/target isolation and hardened runtime settings
+# - AuditAI: self-contained tooling container pattern
+
+x-attacker-labels: &attacker_labels
+  labels:
+    class: "red_team"
+    cluster: "devredteam"
+
+x-victim-labels: &victim_labels
+  labels:
+    class: "victim"
+    cluster: "devredteam"
+
+x-monitoring-labels: &monitoring_labels
+  labels:
+    class: "monitoring"
+    cluster: "devredteam"
+
+x-logging: &loki_logging
+  logging:
+    driver: loki
+    options:
+      loki-url: "http://10.50.0.201:3100/loki/api/v1/push"
+
+x-attacker-hardening: &attacker_hardening
+  read_only: true
+  cap_drop:
+    - ALL
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp
+    - /run
+
+services:
+  attacker:
+    <<: [*attacker_labels, *loki_logging, *attacker_hardening]
+    build:
+      context: ./attacker
+      dockerfile: Dockerfile
+    container_name: devredteam-attacker
+    hostname: attacker
+    user: attacker
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.10
+    depends_on:
+      - target-web
+    volumes:
+      - attacker-data:/home/attacker/work
+
+  # Placeholder victim service that the attacker can reach on the private network.
+  target-web:
+    <<: [*victim_labels, *loki_logging]
+    image: bkimminich/juice-shop:latest
+    container_name: devredteam-target-web
+    hostname: target-web
+    ports:
+      - "9700:3000"
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.20
+
+  grafana:
+    <<: [*monitoring_labels, *loki_logging]
+    image: grafana/grafana:latest
+    container_name: devredteam-grafana
+    hostname: grafana
+    depends_on:
+      - loki
+      - prometheus
+    ports:
+      - "8000:3000"
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.200
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+
+  loki:
+    <<: *monitoring_labels
+    image: grafana/loki:latest
+    container_name: devredteam-loki
+    hostname: loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.201
+    volumes:
+      - loki-data:/loki
+      - ./monitoring/loki/local-config.yaml:/etc/loki/local-config.yaml:ro
+
+  prometheus:
+    <<: [*monitoring_labels, *loki_logging]
+    image: prom/prometheus:latest
+    container_name: devredteam-prometheus
+    hostname: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    depends_on:
+      - cadvisor
+    ports:
+      - "9090:9090"
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.202
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  cadvisor:
+    <<: [*monitoring_labels, *loki_logging]
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: devredteam-cadvisor
+    hostname: cadvisor
+    ports:
+      - "8080:8080"
+    networks:
+      devredteam_lab:
+        ipv4_address: 10.50.0.203
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+
+networks:
+  devredteam_lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.50.0.0/24
+
+volumes:
+  attacker-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:
