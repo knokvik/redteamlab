@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import webbrowser
+import warnings
 from pathlib import Path
 
 from rich.console import Console
@@ -16,6 +17,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 console = Console()
 PROJECT_ROOT = Path(__file__).resolve().parent
 BASE_COMPOSE = PROJECT_ROOT / "docker" / "docker-compose.yml"
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,11 +105,15 @@ def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
         progress.advance(task)
 
         progress.update(task, description="[cyan]4/9 Starting containers[/cyan]")
-        status = orchestrator.run_lab(
-            compose_files=[compose_file],
-            project_name=project_name,
-            skip_compose_up=False,
-        )
+        try:
+            status = orchestrator.run_lab(
+                compose_files=[compose_file],
+                project_name=project_name,
+                skip_compose_up=False,
+            )
+        except Exception as exc:
+            console.print(f"[red]Failed to start lab stack:[/red] {exc}")
+            return 1
         if status != 0:
             return status
         progress.advance(task)
@@ -117,19 +123,28 @@ def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
         progress.advance(task)
 
         progress.update(task, description="[cyan]6-9 Crawling, attacks, observability, report[/cyan]")
-        pipeline = orchestrator.run_attack_intelligence_pipeline(
-            compose_file=compose_file,
-            project_name=project_name,
-            reports_dir=PROJECT_ROOT / "reports",
-            attempts=4,
-            mode=mode,
-            repo_url=github_url,
-            repo_name=re.sub(r"\\.git$", "", github_url.rstrip("/").split("/")[-1]) or Path(repo_path).name,
-        )
+        try:
+            pipeline = orchestrator.run_attack_intelligence_pipeline(
+                compose_file=compose_file,
+                project_name=project_name,
+                reports_dir=PROJECT_ROOT / "reports",
+                attempts=4,
+                mode=mode,
+                repo_url=github_url,
+                repo_name=re.sub(r"\\.git$", "", github_url.rstrip("/").split("/")[-1]) or Path(repo_path).name,
+                stack_snapshot=detection,
+            )
+        except Exception as exc:
+            console.print(f"[red]Attack intelligence pipeline failed:[/red] {exc}")
+            return 1
         progress.advance(task, 4)
 
     report_path = pipeline.get("report", {}).get("report_path")
+    attacks = pipeline.get("attacks", {}).get("attempts", [])
     fallback_used = bool(pipeline.get("attacks", {}).get("fallback_used", False))
+    llm_used = sum(1 for a in attacks if a.get("source") == "remote-ollama")
+    fallback_count = sum(1 for a in attacks if str(a.get("source", "")).startswith("fallback:"))
+    top_cpu = pipeline.get("observability", {}).get("summary", {}).get("max_cpu_percent", 0.0)
     seed_note = (
         f"Seeded {seed_result.get('db_type')} in {seed_result.get('service')}"
         if seed_result.get("seeded")
@@ -144,6 +159,8 @@ def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
                     f"Mode: [bold]{mode}[/bold]",
                     f"Target URL: [bold]{pipeline.get('target_url', 'n/a')}[/bold]",
                     f"Fallback used: [bold]{fallback_used}[/bold]",
+                    f"LLM suggestions: [bold]{llm_used}[/bold] | fallback suggestions: [bold]{fallback_count}[/bold]",
+                    f"Peak CPU observed: [bold]{round(float(top_cpu), 2)}%[/bold]",
                     f"Report: [bold]{report_path or 'not generated'}[/bold]",
                 ]
             ),
