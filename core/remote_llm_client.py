@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Dict
 
@@ -116,6 +117,7 @@ class RemoteLLMClient:
         }
 
         try:
+            warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
             import requests
 
             response = requests.post(
