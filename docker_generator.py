@@ -14,14 +14,6 @@ DEFAULT_BASE_COMPOSE = PROJECT_ROOT / "docker" / "docker-compose.yml"
 DEFAULT_OUTPUT_COMPOSE = PROJECT_ROOT / "docker" / "docker-compose.generated.yml"
 
 
-def _relative_repo_mount(repo_path: Path, project_root: Path) -> str:
-    try:
-        rel = repo_path.relative_to(project_root)
-        return f"../{rel.as_posix()}"
-    except ValueError:
-        return str(repo_path)
-
-
 def _first_network_name(compose_data: Dict) -> str:
     networks = compose_data.get("networks", {})
     if not networks:
@@ -29,57 +21,118 @@ def _first_network_name(compose_data: Dict) -> str:
     return next(iter(networks))
 
 
+def _clone_dict(data: Dict) -> Dict:
+    return json.loads(json.dumps(data))
+
+
+def _labels(role: str) -> Dict:
+    return {"class": "victim", "cluster": "devredteam", "app.role": role}
+
+
+def _workdir_for(repo_path: Path, component_path: str | None) -> str:
+    if not component_path:
+        return "/repo"
+    try:
+        rel = Path(component_path).resolve().relative_to(repo_path.resolve())
+        if not str(rel) or str(rel) == ".":
+            return "/repo"
+        return f"/repo/{rel.as_posix()}"
+    except ValueError:
+        return "/repo"
+
+
 def _target_services_from_detection(
+    repo_path: Path,
     detection: Dict,
     network_name: str,
-    repo_mount: str,
 ) -> Tuple[Dict, Dict]:
     services: Dict = {}
     db_metadata: Dict = {"service": None, "type": None}
 
+    frontend_kind = detection.get("frontend", {}).get("kind")
     frontend_path = detection.get("frontend", {}).get("path")
+    backend_kind = detection.get("backend", {}).get("kind")
     backend_path = detection.get("backend", {}).get("path")
     db_type = detection.get("database", {}).get("type")
 
-    if frontend_path:
-        services["target-frontend"] = {
-            "image": "node:20-alpine",
-            "working_dir": "/app",
-            "command": "sh -c \"npm install && npm run dev -- --host 0.0.0.0 --port 3000\"",
-            "ports": ["3000:3000"],
-            "volumes": [f"{repo_mount}:/app"],
-            "labels": {"class": "victim", "cluster": "devredteam"},
-            "networks": {network_name: {"ipv4_address": "10.50.0.20"}},
-        }
+    repo_mount = f"{repo_path}:/repo"
+    web_workdir = _workdir_for(repo_path, frontend_path or backend_path)
+    api_workdir = _workdir_for(repo_path, backend_path)
 
-    if backend_path:
-        backend_kind = detection.get("backend", {}).get("kind")
-        backend_service = {
-            "labels": {"class": "victim", "cluster": "devredteam"},
+    # Always create target-web so attacker depends_on remains valid.
+    web_service = {
+        "labels": _labels("web"),
+        "networks": {network_name: {"ipv4_address": "10.50.0.20"}},
+    }
+
+    if frontend_kind == "vite-react":
+        web_service.update(
+            {
+                "image": "node:20-alpine",
+                "volumes": [repo_mount],
+                "working_dir": web_workdir,
+                "command": (
+                    "sh -c \"npm install && npm run dev -- --host 0.0.0.0 --port 5173\""
+                ),
+                "ports": ["5173:5173"],
+            }
+        )
+    elif frontend_kind == "nextjs":
+        web_service.update(
+            {
+                "image": "node:20-alpine",
+                "volumes": [repo_mount],
+                "working_dir": web_workdir,
+                "command": (
+                    "sh -c \"npm install && npm run dev -- -H 0.0.0.0 -p 5173\""
+                ),
+                "ports": ["5173:5173"],
+            }
+        )
+    else:
+        # Fallback: always expose a reachable victim web service.
+        web_service.update(
+            {
+                "image": "nginx:alpine",
+                "ports": ["5173:80"],
+                "volumes": [f"{repo_path}:/usr/share/nginx/html:ro"],
+            }
+        )
+
+    services["target-web"] = web_service
+
+    if backend_kind:
+        api_service = {
+            "labels": _labels("api"),
             "networks": {network_name: {"ipv4_address": "10.50.0.30"}},
-            "volumes": [f"{repo_mount}:/app"],
-            "working_dir": "/app",
+            "volumes": [repo_mount],
+            "working_dir": api_workdir,
             "depends_on": [],
         }
-
         if backend_kind == "fastapi":
-            backend_service.update(
+            api_service.update(
                 {
                     "image": "python:3.11-slim",
-                    "command": "sh -c \"pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000\"",
-                    "ports": ["8001:8000"],
+                    "command": (
+                        "sh -c \"pip install -r requirements.txt && "
+                        "uvicorn main:app --host 0.0.0.0 --port 8000\""
+                    ),
+                    "ports": ["8000:8000"],
                 }
             )
         else:
-            backend_service.update(
+            api_service.update(
                 {
                     "image": "node:20-alpine",
-                    "command": "sh -c \"npm install && npm run dev -- --host 0.0.0.0\"",
-                    "ports": ["8001:8000"],
+                    "command": (
+                        "sh -c \"npm install && "
+                        "(npm run dev -- --host 0.0.0.0 --port 3000 || npm start)\""
+                    ),
+                    "ports": ["3000:3000"],
                 }
             )
-
-        services["target-backend"] = backend_service
+        services["target-api"] = api_service
+        services["target-web"].setdefault("depends_on", []).append("target-api")
 
     if db_type == "postgres":
         services["target-db"] = {
@@ -91,7 +144,7 @@ def _target_services_from_detection(
             },
             "ports": ["5432:5432"],
             "volumes": ["target-db-data:/var/lib/postgresql/data"],
-            "labels": {"class": "victim", "cluster": "devredteam"},
+            "labels": _labels("db"),
             "networks": {network_name: {"ipv4_address": "10.50.0.40"}},
         }
         db_metadata = {"service": "target-db", "type": "postgres"}
@@ -106,10 +159,13 @@ def _target_services_from_detection(
             },
             "ports": ["3306:3306"],
             "volumes": ["target-db-data:/var/lib/mysql"],
-            "labels": {"class": "victim", "cluster": "devredteam"},
+            "labels": _labels("db"),
             "networks": {network_name: {"ipv4_address": "10.50.0.40"}},
         }
         db_metadata = {"service": "target-db", "type": "mysql"}
+
+    if "target-db" in services and "target-api" in services:
+        services["target-api"].setdefault("depends_on", []).append("target-db")
 
     return services, db_metadata
 
@@ -121,24 +177,26 @@ def generate_compose_for_repo(
     output_compose_path: Path | str | None = None,
 ) -> Dict:
     """Create a merged compose file containing base + generated target services."""
-    project_root = PROJECT_ROOT
     repo_dir = Path(repo_path).resolve()
     base_path = Path(base_compose_path) if base_compose_path else DEFAULT_BASE_COMPOSE
     output_path = Path(output_compose_path) if output_compose_path else DEFAULT_OUTPUT_COMPOSE
 
-    base_compose = yaml.safe_load(base_path.read_text(encoding="utf-8"))
-    merged = json.loads(json.dumps(base_compose))
+    base_compose = yaml.safe_load(base_path.read_text(encoding="utf-8")) or {}
+    merged = _clone_dict(base_compose)
 
     network_name = _first_network_name(merged)
-    repo_mount = _relative_repo_mount(repo_dir, project_root)
+    generated_services, db_metadata = _target_services_from_detection(
+        repo_path=repo_dir,
+        detection=detection,
+        network_name=network_name,
+    )
 
-    generated_services, db_metadata = _target_services_from_detection(detection, network_name, repo_mount)
+    # Replace stale placeholder victims but keep attacker + monitoring untouched.
+    for service_name in ("target-web", "target-frontend", "target-backend", "target-api", "target-db"):
+        if service_name in merged.get("services", {}) and service_name not in generated_services:
+            merged["services"].pop(service_name, None)
 
-    # Keep attacker + monitoring intact, replace placeholder victim only when dynamic targets exist.
-    if generated_services and "target-web" in merged.get("services", {}):
-        merged["services"].pop("target-web", None)
-
-    merged["services"].update(generated_services)
+    merged.setdefault("services", {}).update(generated_services)
 
     if "target-db" in generated_services:
         merged.setdefault("volumes", {})["target-db-data"] = None
