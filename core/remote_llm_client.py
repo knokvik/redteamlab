@@ -1,4 +1,4 @@
-"""Remote Ollama client with mode-aware prompting and deterministic fallback."""
+"""Remote Ollama client with mode-aware prompting, rich context, and deterministic fallback."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, List
 
 
 DEFAULT_MODEL = "llama3.1:8b"
@@ -20,6 +20,11 @@ class LLMSuggestion:
     tool: str
     command_suggestion: str
     source: str
+    goal_stage: str
+    expected_signal: str
+    confidence: float
+    validation_notes: List[str]
+    fallback_reason: str | None
 
 
 class RemoteLLMClient:
@@ -37,13 +42,16 @@ class RemoteLLMClient:
     def _system_prompt(mode: str) -> str:
         if mode == "aggressive":
             return (
-                "You are an expert red-team assistant for authorized local simulation. "
-                "Return only strict JSON with keys: plan,payload,tool,command_suggestion. "
-                "Prefer high-signal but controlled probes. Never target non-localhost hosts."
+                "You are an aggressive red-team planner for authorized local simulation only. "
+                "Return only strict JSON with keys: plan,payload,tool,command_suggestion and optional "
+                "goal_stage,expected_signal,confidence. "
+                "Generate creative chaining ideas (SQLi -> RCE -> container escape simulation -> DB exfil simulation) "
+                "while keeping every target limited to localhost/127.0.0.1."
             )
         return (
             "You are an expert security testing assistant for authorized local simulation. "
-            "Return only strict JSON with keys: plan,payload,tool,command_suggestion. "
+            "Return only strict JSON with keys: plan,payload,tool,command_suggestion and optional "
+            "goal_stage,expected_signal,confidence. "
             "Prefer low-risk validation probes first. Never target non-localhost hosts."
         )
 
@@ -68,6 +76,11 @@ class RemoteLLMClient:
             tool=tool,
             command_suggestion=suggestion,
             source=f"fallback:{reason}",
+            goal_stage="initial_access",
+            expected_signal="http_error_or_reflection",
+            confidence=0.35 if mode == "safe" else 0.45,
+            validation_notes=["deterministic-fallback"],
+            fallback_reason=reason,
         )
 
     @staticmethod
@@ -91,29 +104,53 @@ class RemoteLLMClient:
             return tool
         return "curl"
 
+    @staticmethod
+    def _coerce_confidence(value) -> float:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            confidence = 0.5
+        return max(0.0, min(1.0, confidence))
+
     def suggest_attack(
         self,
         graph_snapshot: Dict,
         observability_snapshot: Dict,
         attempt_idx: int,
         base_url: str,
+        stack_snapshot: Dict | None = None,
+        target_urls: List[str] | None = None,
         mode: str = "safe",
     ) -> LLMSuggestion:
         if not self._is_localhost_url(base_url):
-            return self._fallback(base_url=base_url, reason="NonLocalhostTarget", attempt_idx=attempt_idx, mode=mode)
+            return self._fallback(
+                base_url=base_url,
+                reason="NonLocalhostTarget",
+                attempt_idx=attempt_idx,
+                mode=mode,
+            )
 
         system_prompt = self._system_prompt(mode)
+        stack_snapshot = stack_snapshot or {}
+        target_urls = target_urls or [base_url]
+        context_envelope = {
+            "attempt": attempt_idx,
+            "mode": mode,
+            "base_url": base_url,
+            "target_urls": target_urls,
+            "stack": stack_snapshot,
+            "graph": graph_snapshot,
+            "observability": observability_snapshot,
+            "schema": {
+                "required": ["plan", "payload", "tool", "command_suggestion"],
+                "optional": ["goal_stage", "expected_signal", "confidence"],
+            },
+        }
         payload = {
             "model": self.model,
             "stream": False,
             "system": system_prompt,
-            "prompt": (
-                f"Attempt: {attempt_idx}\n"
-                f"Mode: {mode}\n"
-                f"Base URL: {base_url}\n"
-                f"Graph: {json.dumps(graph_snapshot)}\n"
-                f"Observability: {json.dumps(observability_snapshot)}"
-            ),
+            "prompt": json.dumps(context_envelope, indent=2),
         }
 
         try:
@@ -129,6 +166,7 @@ class RemoteLLMClient:
             body = response.json()
             raw_text = body.get("response", "")
             parsed = self._extract_json(raw_text)
+            validation_notes: List[str] = []
 
             for field in ["plan", "payload", "tool", "command_suggestion"]:
                 if field not in parsed or not parsed[field]:
@@ -139,12 +177,21 @@ class RemoteLLMClient:
                 if "localhost" not in command_suggestion and "127.0.0.1" not in command_suggestion:
                     raise ValueError("command_suggestion includes non-localhost URL")
 
+            normalized_tool = self._normalize_tool(str(parsed["tool"]))
+            if normalized_tool != str(parsed["tool"]).strip().lower():
+                validation_notes.append("tool-normalized-to-curl")
+
             return LLMSuggestion(
                 plan=str(parsed["plan"]),
                 payload=str(parsed["payload"]),
-                tool=self._normalize_tool(str(parsed["tool"])),
+                tool=normalized_tool,
                 command_suggestion=command_suggestion,
                 source="remote-ollama",
+                goal_stage=str(parsed.get("goal_stage") or "recon"),
+                expected_signal=str(parsed.get("expected_signal") or "status_or_error_shift"),
+                confidence=self._coerce_confidence(parsed.get("confidence", 0.6)),
+                validation_notes=validation_notes,
+                fallback_reason=None,
             )
         except Exception as exc:
             return self._fallback(
