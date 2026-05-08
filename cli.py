@@ -92,6 +92,17 @@ def run_pipeline(github_url: str, project_name: str) -> int:
     else:
         console.print(f"[yellow]Seeder skipped:[/yellow] {seed_result.get('reason', 'unknown')}" )
 
+    console.print("[bold cyan]Running crawler, attack loop, observability, and report generation...[/bold cyan]")
+    pipeline = orchestrator.run_attack_intelligence_pipeline(
+        compose_file=compose_file,
+        project_name=project_name,
+        reports_dir=PROJECT_ROOT / "reports",
+        attempts=4,
+    )
+    report_path = pipeline.get("report", {}).get("report_path")
+    if report_path:
+        console.print(f"[bold green]Report generated:[/bold green] {report_path}")
+
     console.print("[bold green]Pipeline complete.[/bold green]")
     return 0
 

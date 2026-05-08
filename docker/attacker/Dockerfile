@@ -5,6 +5,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Self-contained attacker image with common web testing and network tooling.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     kali-tools-web \
+    nuclei \
+    sqlmap \
     nmap \
     curl \
     wget \

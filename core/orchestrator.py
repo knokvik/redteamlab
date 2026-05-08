@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Dict, List
 
@@ -12,6 +13,11 @@ import docker
 import yaml
 from rich.console import Console
 from rich.table import Table
+
+from core.attack_orchestrator import run_attack_loop
+from core.observability import ObservabilityCollector
+from core.playwright_crawler import crawl_and_build_graph, select_primary_target_url
+from core.report_generator import generate_report
 
 console = Console()
 
@@ -165,6 +171,72 @@ def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", s
 
     console.print("[bold green]Lab is up. Attacker can reach target services.[/bold green]")
     return 0
+
+
+def run_attack_intelligence_pipeline(
+    compose_file: Path | str,
+    project_name: str = "devredteam",
+    reports_dir: Path | str | None = None,
+    attempts: int = 4,
+) -> Dict:
+    compose_path = Path(compose_file).resolve()
+    report_dir = Path(reports_dir) if reports_dir else Path(__file__).resolve().parents[1] / "reports"
+
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
+    base_url = select_primary_target_url(compose_path)
+    console.print(f"[bold cyan]Playwright target URL:[/bold cyan] {base_url}")
+
+    try:
+        crawl_result = crawl_and_build_graph(base_url=base_url, run_id=run_id)
+    except Exception as exc:
+        crawl_result = {
+            "run_id": run_id,
+            "base_url": base_url,
+            "error": f"crawler failure: {exc}",
+            "flows": [],
+            "endpoints": [],
+            "graph": {"nodes": [], "edges": []},
+        }
+
+    collector = ObservabilityCollector(project_name=project_name, sample_interval_s=2)
+    collector.start()
+    try:
+        try:
+            attack_result = run_attack_loop(
+                base_url=base_url,
+                graph_snapshot=crawl_result.get("graph", {}),
+                observability_collector=collector,
+                project_name=project_name,
+                attempts=attempts,
+            )
+        except Exception as exc:
+            attack_result = {
+                "attempts": [],
+                "error": f"attack loop failure: {exc}",
+            }
+    finally:
+        try:
+            observability_result = collector.stop()
+        except Exception as exc:
+            observability_result = {"samples": [], "summary": {}, "error": str(exc)}
+
+    report_result = generate_report(
+        output_dir=report_dir,
+        target_url=base_url,
+        crawl_result=crawl_result,
+        attack_result=attack_result,
+        observability_result=observability_result,
+        compose_file=str(compose_path),
+    )
+
+    return {
+        "run_id": run_id,
+        "target_url": base_url,
+        "crawl": crawl_result,
+        "attacks": attack_result,
+        "observability": observability_result,
+        "report": report_result,
+    }
 
 
 def main() -> int:
