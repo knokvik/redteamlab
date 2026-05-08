@@ -2,23 +2,27 @@ FROM kalilinux/kali-rolling
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Self-contained attacker image with common web testing and network tooling.
+# Base network/runtime utilities (more stable cache layer).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    wget \
+    jq \
+    python3 \
+    python3-pip \
+    iproute2 \
+    iputils-ping \
+    dnsutils \
+    net-tools \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Security tooling layer (heavier layer isolated for better cache reuse).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     kali-tools-web \
     nuclei \
     sqlmap \
     nmap \
-    curl \
-    wget \
-    netcat-openbsd \
-    iproute2 \
-    iputils-ping \
-    dnsutils \
-    net-tools \
-    jq \
-    python3 \
-    python3-pip \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user (compose grants only minimal network caps when needed).
