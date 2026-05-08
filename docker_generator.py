@@ -1,4 +1,8 @@
-"""Generate target services and merge them with the existing lab compose."""
+"""Generate target services and merge them with the existing lab compose.
+
+Enhanced with MongoDB, Redis, Django/Flask/Go/Rails/Spring backends,
+Angular/Svelte/Vue frontends, and smarter port mapping.
+"""
 
 from __future__ import annotations
 
@@ -54,6 +58,7 @@ def _target_services_from_detection(
     backend_kind = detection.get("backend", {}).get("kind")
     backend_path = detection.get("backend", {}).get("path")
     db_type = detection.get("database", {}).get("type")
+    cache_type = detection.get("cache", {}).get("type")
 
     repo_mount = f"{repo_path}:/repo"
     web_workdir = _workdir_for(repo_path, frontend_path or backend_path)
@@ -65,7 +70,7 @@ def _target_services_from_detection(
         "networks": {network_name: {"ipv4_address": "10.50.0.20"}},
     }
 
-    if frontend_kind == "vite-react":
+    if frontend_kind == "vite-react" or frontend_kind == "vite-react-ts":
         web_service.update(
             {
                 "image": "node:20-alpine",
@@ -85,6 +90,42 @@ def _target_services_from_detection(
                 "working_dir": web_workdir,
                 "command": (
                     "sh -c \"npm install && npm run dev -- -H 0.0.0.0 -p 5173\""
+                ),
+                "ports": ["5173:5173"],
+            }
+        )
+    elif frontend_kind == "nuxtjs":
+        web_service.update(
+            {
+                "image": "node:20-alpine",
+                "volumes": [repo_mount],
+                "working_dir": web_workdir,
+                "command": (
+                    "sh -c \"npm install && npm run dev -- --host 0.0.0.0 --port 5173\""
+                ),
+                "ports": ["5173:5173"],
+            }
+        )
+    elif frontend_kind == "angular":
+        web_service.update(
+            {
+                "image": "node:20-alpine",
+                "volumes": [repo_mount],
+                "working_dir": web_workdir,
+                "command": (
+                    "sh -c \"npm install && npx ng serve --host 0.0.0.0 --port 5173 --disable-host-check\""
+                ),
+                "ports": ["5173:5173"],
+            }
+        )
+    elif frontend_kind in ("svelte", "vue"):
+        web_service.update(
+            {
+                "image": "node:20-alpine",
+                "volumes": [repo_mount],
+                "working_dir": web_workdir,
+                "command": (
+                    "sh -c \"npm install && npm run dev -- --host 0.0.0.0 --port 5173\""
                 ),
                 "ports": ["5173:5173"],
             }
@@ -109,6 +150,7 @@ def _target_services_from_detection(
             "working_dir": api_workdir,
             "depends_on": [],
         }
+
         if backend_kind == "fastapi":
             api_service.update(
                 {
@@ -120,7 +162,64 @@ def _target_services_from_detection(
                     "ports": ["8000:8000"],
                 }
             )
+        elif backend_kind == "django":
+            api_service.update(
+                {
+                    "image": "python:3.11-slim",
+                    "command": (
+                        "sh -c \"pip install -r requirements.txt && "
+                        "python manage.py migrate --noinput && "
+                        "python manage.py runserver 0.0.0.0:8000\""
+                    ),
+                    "ports": ["8000:8000"],
+                }
+            )
+        elif backend_kind == "flask":
+            api_service.update(
+                {
+                    "image": "python:3.11-slim",
+                    "command": (
+                        "sh -c \"pip install -r requirements.txt && "
+                        "flask run --host 0.0.0.0 --port 8000\""
+                    ),
+                    "ports": ["8000:8000"],
+                    "environment": {"FLASK_APP": "app.py", "FLASK_ENV": "development"},
+                }
+            )
+        elif backend_kind == "spring-boot":
+            api_service.update(
+                {
+                    "image": "maven:3.9-eclipse-temurin-21",
+                    "command": "sh -c \"mvn spring-boot:run -Dspring-boot.run.arguments='--server.port=8000 --server.address=0.0.0.0'\"",
+                    "ports": ["8000:8000"],
+                }
+            )
+        elif backend_kind == "rails":
+            api_service.update(
+                {
+                    "image": "ruby:3.2-slim",
+                    "command": "sh -c \"bundle install && rails server -b 0.0.0.0 -p 3000\"",
+                    "ports": ["3000:3000"],
+                }
+            )
+        elif backend_kind == "go-backend":
+            api_service.update(
+                {
+                    "image": "golang:1.22-alpine",
+                    "command": "sh -c \"go build -o server . && ./server\"",
+                    "ports": ["8000:8000"],
+                }
+            )
+        elif backend_kind == "laravel":
+            api_service.update(
+                {
+                    "image": "php:8.2-cli",
+                    "command": "sh -c \"composer install && php artisan serve --host=0.0.0.0 --port=8000\"",
+                    "ports": ["8000:8000"],
+                }
+            )
         else:
+            # Generic Node.js backend
             api_service.update(
                 {
                     "image": "node:20-alpine",
@@ -134,6 +233,7 @@ def _target_services_from_detection(
         services["target-api"] = api_service
         services["target-web"].setdefault("depends_on", []).append("target-api")
 
+    # ---- Database services ----
     if db_type == "postgres":
         services["target-db"] = {
             "image": "postgres:15",
@@ -163,9 +263,34 @@ def _target_services_from_detection(
             "networks": {network_name: {"ipv4_address": "10.50.0.40"}},
         }
         db_metadata = {"service": "target-db", "type": "mysql"}
+    elif db_type == "mongodb":
+        services["target-db"] = {
+            "image": "mongo:7",
+            "environment": {
+                "MONGO_INITDB_ROOT_USERNAME": "app",
+                "MONGO_INITDB_ROOT_PASSWORD": "app",
+                "MONGO_INITDB_DATABASE": "appdb",
+            },
+            "ports": ["27017:27017"],
+            "volumes": ["target-db-data:/data/db"],
+            "labels": _labels("db"),
+            "networks": {network_name: {"ipv4_address": "10.50.0.40"}},
+        }
+        db_metadata = {"service": "target-db", "type": "mongodb"}
+
+    # ---- Cache/Queue services ----
+    if cache_type == "redis":
+        services["target-cache"] = {
+            "image": "redis:7-alpine",
+            "ports": ["6379:6379"],
+            "labels": _labels("cache"),
+            "networks": {network_name: {"ipv4_address": "10.50.0.50"}},
+        }
 
     if "target-db" in services and "target-api" in services:
         services["target-api"].setdefault("depends_on", []).append("target-db")
+    if "target-cache" in services and "target-api" in services:
+        services["target-api"].setdefault("depends_on", []).append("target-cache")
 
     return services, db_metadata
 
@@ -192,7 +317,7 @@ def generate_compose_for_repo(
     )
 
     # Replace stale placeholder victims but keep attacker + monitoring untouched.
-    for service_name in ("target-web", "target-frontend", "target-backend", "target-api", "target-db"):
+    for service_name in ("target-web", "target-frontend", "target-backend", "target-api", "target-db", "target-cache"):
         if service_name in merged.get("services", {}) and service_name not in generated_services:
             merged["services"].pop(service_name, None)
 
