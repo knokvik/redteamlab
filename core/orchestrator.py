@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -178,9 +180,13 @@ def run_attack_intelligence_pipeline(
     project_name: str = "devredteam",
     reports_dir: Path | str | None = None,
     attempts: int = 4,
+    mode: str = "safe",
+    repo_url: str = "",
+    repo_name: str = "",
 ) -> Dict:
     compose_path = Path(compose_file).resolve()
     report_dir = Path(reports_dir) if reports_dir else Path(__file__).resolve().parents[1] / "reports"
+    repo_slug = repo_name or re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1]) or "repo"
 
     run_id = f"run-{uuid.uuid4().hex[:12]}"
     base_url = select_primary_target_url(compose_path)
@@ -208,10 +214,12 @@ def run_attack_intelligence_pipeline(
                 observability_collector=collector,
                 project_name=project_name,
                 attempts=attempts,
+                mode=mode,
             )
         except Exception as exc:
             attack_result = {
                 "attempts": [],
+                "fallback_used": True,
                 "error": f"attack loop failure: {exc}",
             }
     finally:
@@ -220,14 +228,42 @@ def run_attack_intelligence_pipeline(
         except Exception as exc:
             observability_result = {"samples": [], "summary": {}, "error": str(exc)}
 
-    report_result = generate_report(
-        output_dir=report_dir,
-        target_url=base_url,
-        crawl_result=crawl_result,
-        attack_result=attack_result,
-        observability_result=observability_result,
-        compose_file=str(compose_path),
-    )
+    try:
+        report_result = generate_report(
+            output_root=report_dir,
+            repo_name=repo_slug,
+            repo_url=repo_url or "n/a",
+            mode=mode,
+            run_id=run_id,
+            target_url=base_url,
+            crawl_result=crawl_result,
+            attack_result=attack_result,
+            observability_result=observability_result,
+            compose_file=str(compose_path),
+        )
+    except Exception as exc:
+        fallback_dir = report_dir / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{repo_slug}"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_file = fallback_dir / "index.html"
+        fallback_file.write_text(
+            (
+                "<html><body><h1>DevRedTeam Report (Fallback)</h1>"
+                f"<p>Run ID: {run_id}</p>"
+                f"<p>Target: {base_url}</p>"
+                f"<p>Mode: {mode}</p>"
+                f"<p>Report generation error: {exc}</p>"
+                "</body></html>"
+            ),
+            encoding="utf-8",
+        )
+        report_result = {
+            "report_path": str(fallback_file),
+            "report_dir": str(fallback_dir),
+            "base_cvss": 0.0,
+            "behavior_impact": 0.0,
+            "hybrid_cvss": 0.0,
+            "error": str(exc),
+        }
 
     return {
         "run_id": run_id,
@@ -236,6 +272,8 @@ def run_attack_intelligence_pipeline(
         "attacks": attack_result,
         "observability": observability_result,
         "report": report_result,
+        "mode": mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
