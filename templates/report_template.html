@@ -155,7 +155,9 @@
         <div class="meta-item"><strong>Run Time</strong><br />{{ run.generated_at }}</div>
         <div class="meta-item"><strong>Mode</strong><br />{{ run.mode }}</div>
         <div class="meta-item"><strong>Target URL</strong><br />{{ run.target_url }}</div>
+        <div class="meta-item"><strong>All Target URLs</strong><br />{{ run.target_urls | join(', ') }}</div>
         <div class="meta-item"><strong>Run ID</strong><br />{{ run.run_id }}</div>
+        <div class="meta-item"><strong>Stack</strong><br />{{ run.stack_technologies | join(', ') or 'unknown' }}</div>
         <div class="meta-item"><strong>Compose File</strong><br /><span class="tiny">{{ run.compose_file }}</span></div>
       </div>
     </section>
@@ -168,7 +170,17 @@
         <span class="chip">Behavior Impact: {{ cvss.behavior }}</span>
       </div>
       <p class="muted">Formula used: <code>(base_cvss * 0.6) + (behavior_impact * 0.4)</code></p>
+      <p class="muted">Weights: base={{ cvss.weights.base }}, behavior={{ cvss.weights.behavior }}</p>
       <p>{{ cvss.explanation }}</p>
+    </section>
+
+    <section class="card">
+      <h2>LLM Suggestion Summary</h2>
+      <p><strong>Fallback count:</strong> {{ llm.fallback_count }}</p>
+      <p><strong>Source mix:</strong> {{ llm.source_counts }}</p>
+      <p><strong>Tool mix:</strong> {{ llm.tool_counts }}</p>
+      <pre>{% for line in llm.suggestion_lines %}{{ line }}
+{% endfor %}</pre>
     </section>
 
     <section class="card">
@@ -184,6 +196,7 @@
             <th>X-RedTeam-ID</th>
             <th>Status</th>
             <th>Source</th>
+            <th>Impact Window</th>
           </tr>
         </thead>
         <tbody>
@@ -197,6 +210,11 @@
             <td><code>{{ row.id }}</code></td>
             <td>{% if row.success %}<span class="ok">success</span>{% else %}<span class="bad">failed</span>{% endif %}</td>
             <td>{{ row.source }}</td>
+            <td>
+              CPU {{ row.impact_window.max_cpu_percent | default(0) }}%
+              / DB {{ row.impact_window.db_latency_max_ms | default('n/a') }} ms
+              / errors {{ row.impact_window.error_log_hits | default(0) }}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -214,6 +232,10 @@
             <li>Max CPU: <strong>{{ impact.max_cpu_percent }}%</strong></li>
             <li>Avg CPU: <strong>{{ impact.avg_cpu_percent }}%</strong></li>
             <li>Max Memory: <strong>{{ impact.max_memory_mb }} MB</strong></li>
+            <li>DB Max Latency: <strong>{{ impact.db_latency_max_ms if impact.db_latency_max_ms is not none else 'n/a' }} ms</strong></li>
+            <li>DB Avg Latency: <strong>{{ impact.db_latency_avg_ms if impact.db_latency_avg_ms is not none else 'n/a' }} ms</strong></li>
+            <li>Error Log Hits: <strong>{{ impact.error_log_hits }}</strong></li>
+            <li>Sensitive Log Hits: <strong>{{ impact.sensitive_log_hits }}</strong></li>
             <li>Sample Count: <strong>{{ impact.sample_count }}</strong></li>
           </ul>
         </div>

@@ -28,29 +28,60 @@ def _slugify(name: str) -> str:
     return normalized or "repo"
 
 
-def _behavior_impact_score(observability_summary: Dict, attacks: List[Dict]) -> float:
-    max_cpu = float(observability_summary.get("max_cpu_percent", 0.0))
-    max_mem = float(observability_summary.get("max_memory_bytes", 0.0))
-    success_count = sum(1 for a in attacks if a.get("success"))
-
-    cpu_score = min(10.0, max_cpu / 10.0)
-    mem_score = min(10.0, max_mem / (512 * 1024 * 1024))
-    success_score = min(10.0, success_count * 2.0)
-    return round((cpu_score * 0.45) + (mem_score * 0.25) + (success_score * 0.3), 2)
-
-
 def _base_cvss_from_attacks(attacks: List[Dict]) -> float:
     if not attacks:
         return 0.0
 
     high_signal = 0
     for attempt in attacks:
-        text = f"{attempt.get('plan', '')} {attempt.get('output', '')}".lower()
-        if any(token in text for token in ["vulnerable", "sql", "injection", "xss", "critical", "password"]):
+        text = (
+            f"{attempt.get('plan', '')} {attempt.get('stdout', '')} "
+            f"{attempt.get('stderr', '')}"
+        ).lower()
+        if any(token in text for token in ["vulnerable", "sql", "injection", "xss", "critical", "password", "dump"]):
             high_signal += 1
 
     ratio = high_signal / max(1, len(attacks))
-    return round(min(10.0, 3.5 + (ratio * 6.5)), 2)
+    return round(min(10.0, 3.2 + (ratio * 6.8)), 2)
+
+
+def _behavior_impact_score(observability_summary: Dict, attempt_correlations: Dict[str, Dict], attacks: List[Dict]) -> float:
+    max_cpu = float(observability_summary.get("max_cpu_percent", 0.0) or 0.0)
+    max_mem = float(observability_summary.get("max_memory_bytes", 0.0) or 0.0)
+    db_latency = observability_summary.get("db_latency_max_ms")
+    err_hits = float(observability_summary.get("error_log_hits", 0) or 0)
+    sensitive_hits = float(observability_summary.get("sensitive_log_hits", 0) or 0)
+
+    cpu_score = min(10.0, max_cpu / 10.0)
+    mem_score = min(10.0, max_mem / (512 * 1024 * 1024))
+    db_score = min(10.0, float(db_latency or 0.0) / 40.0)
+    error_score = min(10.0, err_hits / 3.0)
+    leak_score = min(10.0, sensitive_hits / 2.0)
+
+    successes = sum(1 for a in attacks if a.get("success"))
+    success_score = min(10.0, successes * 2.0)
+
+    # Correlation bonus for attack windows with strong signals.
+    corr_bonus = 0.0
+    for corr in attempt_correlations.values():
+        window = corr.get("window_summary", {})
+        if float(window.get("max_cpu_percent", 0.0) or 0.0) > 60:
+            corr_bonus += 0.4
+        if float(window.get("error_log_hits", 0.0) or 0.0) > 0:
+            corr_bonus += 0.3
+        if float(window.get("sensitive_log_hits", 0.0) or 0.0) > 0:
+            corr_bonus += 0.4
+
+    score = (
+        (cpu_score * 0.25)
+        + (mem_score * 0.15)
+        + (db_score * 0.15)
+        + (error_score * 0.15)
+        + (leak_score * 0.15)
+        + (success_score * 0.15)
+        + corr_bonus
+    )
+    return round(min(10.0, score), 2)
 
 
 def _cvss_badge_color(score: float) -> str:
@@ -63,32 +94,11 @@ def _cvss_badge_color(score: float) -> str:
     return "#15803d"
 
 
-def _summarize_logs(samples: List[Dict]) -> str:
-    interesting = []
-    tokens = ("error", "exception", "failed", "x-redteam-id", "sql", "traceback")
-
-    for sample in samples[-6:]:
-        for container in sample.get("containers", []):
-            logs = container.get("log_excerpt", "")
-            for line in logs.splitlines():
-                if any(token in line.lower() for token in tokens):
-                    interesting.append(f"[{container.get('container', 'unknown')}] {line}")
-                if len(interesting) >= 25:
-                    break
-            if len(interesting) >= 25:
-                break
-        if len(interesting) >= 25:
-            break
-
-    if interesting:
-        return "\n".join(interesting)
-    return "No high-signal log lines were captured in this run window."
-
-
 def _extract_metrics_series(samples: List[Dict]) -> Dict[str, List[float]]:
     timestamps: List[str] = []
     cpu_values: List[float] = []
     mem_values_mb: List[float] = []
+    db_latency_values: List[float | None] = []
 
     for sample in samples:
         timestamps.append(sample.get("timestamp", ""))
@@ -97,10 +107,19 @@ def _extract_metrics_series(samples: List[Dict]) -> Dict[str, List[float]]:
         for container in sample.get("containers", []):
             cpu_max = max(cpu_max, float(container.get("cpu_percent", 0.0) or 0.0))
             mem_max = max(mem_max, float(container.get("memory_bytes", 0.0) or 0.0))
+        db_info = sample.get("db", {})
+        db_latency = db_info.get("db_query_latency_ms")
+
         cpu_values.append(round(cpu_max, 3))
         mem_values_mb.append(round(mem_max / (1024 * 1024), 3))
+        db_latency_values.append(round(float(db_latency), 3) if isinstance(db_latency, (float, int)) else None)
 
-    return {"timestamps": timestamps, "cpu": cpu_values, "memory_mb": mem_values_mb}
+    return {
+        "timestamps": timestamps,
+        "cpu": cpu_values,
+        "memory_mb": mem_values_mb,
+        "db_latency_ms": db_latency_values,
+    }
 
 
 def _graph_to_plot_html(
@@ -224,13 +243,24 @@ def _metrics_chart_html(samples: List[Dict], include_plotlyjs: bool) -> str:
             line=dict(color="#0369a1"),
         )
     )
+    fig.add_trace(
+        go.Scatter(
+            x=series["timestamps"],
+            y=series["db_latency_ms"],
+            mode="lines+markers",
+            name="DB Query Latency ms",
+            yaxis="y3",
+            line=dict(color="#7c3aed"),
+        )
+    )
     fig.update_layout(
         template="plotly_white",
-        height=360,
+        height=380,
         margin=dict(l=10, r=10, t=20, b=10),
         xaxis=dict(title="Timestamp", tickangle=25),
         yaxis=dict(title="CPU %"),
         yaxis2=dict(title="Memory MB", overlaying="y", side="right"),
+        yaxis3=dict(title="DB ms", overlaying="y", side="left", anchor="free", position=0.06),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
 
@@ -251,14 +281,14 @@ def _enrich_after_graph(before_graph: Dict, attacks: List[Dict]) -> Dict:
             continue
         tool = str(attack.get("tool", "probe"))
         payload = str(attack.get("payload", "")).strip()
-        attack_node = f"attack:{tool}"
+        attack_node = f"attack:{tool}:{attack.get('attempt')}"
         if not any((n.get("id") == attack_node) if isinstance(n, dict) else (n == attack_node) for n in nodes):
             nodes.append({"id": attack_node, "kind": "red_team"})
         edges.append(
             {
                 "source": "attacker",
                 "target": attack_node,
-                "reason": "successful-tool-execution",
+                "reason": f"success:{tool}",
             }
         )
         if payload:
@@ -266,7 +296,7 @@ def _enrich_after_graph(before_graph: Dict, attacks: List[Dict]) -> Dict:
                 {
                     "source": attack_node,
                     "target": "frontend",
-                    "reason": f"payload:{payload[:40]}",
+                    "reason": f"payload:{payload[:52]}",
                 }
             )
 
@@ -275,18 +305,51 @@ def _enrich_after_graph(before_graph: Dict, attacks: List[Dict]) -> Dict:
 
 def _prioritized_fixes(attacks: List[Dict], observability_summary: Dict) -> List[str]:
     fixes = [
-        "Add strict input validation and output encoding on all user-controlled parameters.",
-        "Instrument rate limits and request anomaly detection for repeated probing patterns.",
-        "Reduce sensitive log exposure; avoid logging raw payloads, tokens, and stack traces.",
-        "Harden DB access: parameterized queries only and least-privileged DB credentials.",
+        "Add strict input validation and output encoding for all user-controlled parameters.",
+        "Instrument rate limiting and request anomaly detection for repeated attack patterns.",
+        "Reduce sensitive log exposure; redact tokens/secrets and avoid raw payload logging.",
+        "Harden DB access with parameterized queries and least-privileged credentials.",
     ]
 
-    if float(observability_summary.get("max_cpu_percent", 0.0)) > 80:
-        fixes.insert(0, "Investigate CPU saturation and add circuit breakers for expensive request paths.")
+    if float(observability_summary.get("max_cpu_percent", 0.0) or 0.0) > 80:
+        fixes.insert(0, "Investigate CPU saturation and add resource guards for expensive request paths.")
+    if observability_summary.get("db_latency_max_ms") and float(observability_summary.get("db_latency_max_ms") or 0.0) > 120:
+        fixes.insert(0, "Investigate DB latency spikes and optimize slow query paths under attack load.")
+    if float(observability_summary.get("sensitive_log_hits", 0.0) or 0.0) > 0:
+        fixes.insert(0, "Add log sanitization controls and disable sensitive-value logging in production paths.")
     if any("sql" in str(a.get("output", "")).lower() for a in attacks):
-        fixes.insert(0, "Run targeted SQL injection remediation and enforce query parameterization checks.")
+        fixes.insert(0, "Run targeted SQLi remediation and automated query parameterization checks.")
 
-    return fixes[:6]
+    return fixes[:8]
+
+
+def _llm_summary(attacks: List[Dict]) -> Dict:
+    source_counts: Dict[str, int] = {}
+    tool_counts: Dict[str, int] = {}
+    fallback_count = 0
+
+    for attack in attacks:
+        source = str(attack.get("source", "unknown"))
+        tool = str(attack.get("tool", "unknown"))
+        source_counts[source] = source_counts.get(source, 0) + 1
+        tool_counts[tool] = tool_counts.get(tool, 0) + 1
+        if source.startswith("fallback:"):
+            fallback_count += 1
+
+    lines = []
+    for attack in attacks:
+        lines.append(
+            f"#{attack.get('attempt')} [{attack.get('source')}] "
+            f"tool={attack.get('tool')} conf={attack.get('confidence', 'n/a')} "
+            f"plan={str(attack.get('plan', ''))[:120]}"
+        )
+
+    return {
+        "source_counts": source_counts,
+        "tool_counts": tool_counts,
+        "fallback_count": fallback_count,
+        "suggestion_lines": lines,
+    }
 
 
 def generate_report(
@@ -296,6 +359,8 @@ def generate_report(
     mode: str,
     run_id: str,
     target_url: str,
+    target_urls: List[str] | None,
+    stack_snapshot: Dict | None,
     crawl_result: Dict,
     attack_result: Dict,
     observability_result: Dict,
@@ -313,9 +378,10 @@ def generate_report(
     attacks = attack_result.get("attempts", [])
     summary = observability_result.get("summary", {})
     samples = observability_result.get("samples", [])
+    correlations = observability_result.get("attempt_correlations", {})
 
     base_cvss = _base_cvss_from_attacks(attacks)
-    behavior_impact = _behavior_impact_score(summary, attacks)
+    behavior_impact = _behavior_impact_score(summary, correlations, attacks)
     hybrid_cvss = round((base_cvss * 0.6) + (behavior_impact * 0.4), 2)
 
     before_graph = crawl_result.get("graph", {"nodes": [], "edges": []})
@@ -342,10 +408,12 @@ def generate_report(
         "mode": mode,
         "run_id": run_id,
         "target_url": target_url,
+        "target_urls": target_urls or [target_url],
         "compose_file": compose_file,
         "generated_at": now.isoformat(),
         "report_dir": str(report_dir),
         "self_uri": report_index.as_uri(),
+        "stack_technologies": (stack_snapshot or {}).get("technologies", []),
     }
 
     impact_context = {
@@ -353,8 +421,22 @@ def generate_report(
         "avg_cpu_percent": round(float(summary.get("avg_cpu_percent", 0.0)), 3),
         "max_memory_mb": round(float(summary.get("max_memory_bytes", 0.0)) / (1024 * 1024), 3),
         "sample_count": int(summary.get("sample_count", 0)),
-        "log_excerpt": _summarize_logs(samples),
+        "db_latency_max_ms": summary.get("db_latency_max_ms"),
+        "db_latency_avg_ms": summary.get("db_latency_avg_ms"),
+        "error_log_hits": int(summary.get("error_log_hits", 0) or 0),
+        "sensitive_log_hits": int(summary.get("sensitive_log_hits", 0) or 0),
+        "log_excerpt": summary.get("log_excerpt") or "No correlated error/leak lines found.",
     }
+
+    # Enrich timeline rows with per-attempt correlation summaries.
+    timeline = []
+    for attack in attacks:
+        row = dict(attack)
+        corr = correlations.get(attack.get("id"), {})
+        row["impact_window"] = corr.get("window_summary", {})
+        timeline.append(row)
+
+    llm_summary = _llm_summary(attacks)
 
     cvss_context = {
         "base": base_cvss,
@@ -362,9 +444,10 @@ def generate_report(
         "hybrid": hybrid_cvss,
         "badge_color": _cvss_badge_color(hybrid_cvss),
         "explanation": (
-            "Hybrid CVSS combines classic severity evidence from payload outcomes with observed "
-            "runtime behavior (resource spikes and correlated logs)."
+            "Hybrid CVSS combines exploit evidence (base severity) with observed runtime behavior "
+            "(CPU/memory/DB latency/log impact) using weighted scoring."
         ),
+        "weights": {"base": 0.6, "behavior": 0.4},
     }
 
     template_dir = Path(__file__).resolve().parents[1] / "templates"
@@ -376,8 +459,10 @@ def generate_report(
 
     html = template.render(
         run=run_context,
-        timeline=attacks,
+        timeline=timeline,
         impact=impact_context,
+        correlations=correlations,
+        llm=llm_summary,
         cvss=cvss_context,
         fixes=_prioritized_fixes(attacks, summary),
         metrics_chart_html=metrics_html,
@@ -387,7 +472,7 @@ def generate_report(
     report_index.write_text(html, encoding="utf-8")
 
     # Traceability artifacts.
-    (report_dir / "timeline.json").write_text(json.dumps(attacks, indent=2), encoding="utf-8")
+    (report_dir / "timeline.json").write_text(json.dumps(timeline, indent=2), encoding="utf-8")
     (report_dir / "observability.json").write_text(json.dumps(observability_result, indent=2), encoding="utf-8")
     (report_dir / "graph_before.json").write_text(json.dumps(before_graph, indent=2), encoding="utf-8")
     (report_dir / "graph_after.json").write_text(json.dumps(after_graph, indent=2), encoding="utf-8")
@@ -398,4 +483,5 @@ def generate_report(
         "base_cvss": base_cvss,
         "behavior_impact": behavior_impact,
         "hybrid_cvss": hybrid_cvss,
+        "llm_summary": llm_summary,
     }
