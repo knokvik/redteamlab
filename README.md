@@ -1,58 +1,81 @@
-# DevRedTeam Docker Foundation
+# DevRedTeam Lab
 
-This step builds only the Docker foundation by cleanly recreating Docker patterns from:
+DevRedTeam is a Docker-first red-team simulation lab.
 
-- `oliverwiegers/pentest_lab`
-- `dinosn/pack2theroot-lab`
-- `anpa1200/AuditAI`
+It keeps the original hardened foundation intact:
+- private Docker network with static IPs
+- isolated Kali attacker container
+- Grafana + Loki + Prometheus + cAdvisor observability stack
+- generated target services for cloned repos
 
-## Included patterns
-
-- Private Docker bridge network with static IPs for attacker, target, and monitoring stack
-- Merged single `docker-compose.yml` with attacker + target + Grafana/Loki/Prometheus/cAdvisor
-- Kali-based isolated attacker container
-- Hardened attacker runtime (`read_only`, `cap_drop`, minimal `cap_add`, `no-new-privileges`, non-root user)
-- Loki Docker logging driver usage for centralized logs
-- Persistent volumes and host port mappings where needed
-- One-command startup script
-- Python orchestrator using Docker SDK to start/verify attacker and test target reachability
-
-## Folder structure
-
-```text
-devredteam/
-├── docker/
-│   ├── docker-compose.yml
-│   ├── attacker/
-│   │   └── Dockerfile
-│   ├── monitoring/
-│   │   ├── loki/
-│   │   ├── prometheus/
-│   │   └── grafana/
-│   └── services/
-├── core/
-│   └── orchestrator.py
-├── scripts/
-│   └── start_lab.sh
-├── requirements.txt
-└── README.md
-```
-
-## Run
+## Quick Start
 
 ```bash
-./scripts/start_lab.sh
+cd /Users/nirajrajendranaphade/Programming/redteamlab/devredteam
+pip install -r requirements.txt
+python cli.py run https://github.com/knokvik/portfolio
 ```
 
-## Access
+## Run Modes
 
-- Target app: `http://localhost:9700`
+`safe` is default:
+
+```bash
+python cli.py run https://github.com/knokvik/portfolio --safe
+```
+
+Aggressive mode:
+
+```bash
+python cli.py run https://github.com/knokvik/portfolio --aggressive
+```
+
+Both modes run the full flow:
+1. clone repo
+2. detect stack
+3. generate merged compose
+4. start attacker + target + monitoring
+5. seed dummy DB data (if detected)
+6. crawl target with Playwright
+7. run attack loop with remote LLM suggestions (or deterministic fallback)
+8. collect observability samples
+9. generate HTML report and auto-open it
+
+## Report Output
+
+Each run writes a timestamped folder:
+
+`reports/<YYYYMMDD-HHMMSS>-<repo-name>/index.html`
+
+The report includes:
+- run metadata
+- attack timeline with `X-RedTeam-ID`
+- observed impact (CPU/memory/log correlation)
+- before/after attack graph
+- hybrid CVSS score
+- prioritized fix guidance
+
+## Remote Ollama Setup
+
+Set remote Ollama host (friend machine or Tailscale IP):
+
+```bash
+export OLLAMA_HOST=http://100.100.100.10:11434
+export OLLAMA_MODEL=llama3.1:8b
+```
+
+If Ollama is unavailable or returns invalid JSON, DevRedTeam automatically falls back to deterministic localhost-safe attack suggestions so runs do not fail.
+
+## Monitoring URLs
+
+- Target app: `http://localhost:9700` (or generated app port such as `5173`)
 - Grafana: `http://localhost:8000`
 - Prometheus: `http://localhost:9090`
 - cAdvisor: `http://localhost:8080`
 - Loki API: `http://localhost:3100`
 
-## Notes
+## Report Screenshot (Placeholder)
 
-- This is intentionally limited to Docker foundation only.
-- No cloning/orchestration of arbitrary GitHub apps, no LLM attack logic, and no reporting pipeline are added in this step.
+Add a screenshot here after a sample run:
+
+`docs/report-screenshot.png`
