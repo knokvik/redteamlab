@@ -106,14 +106,14 @@ def _behavior_impact_score(observability_summary: Dict, attempt_correlations: Di
     return round(min(10.0, score), 2)
 
 
-def _cvss_badge_color(score: float) -> str:
+def _cvss_badge_class(score: float) -> str:
     if score >= 9.0:
-        return "#7f1d1d"
+        return "badge-critical"
     if score >= 7.0:
-        return "#b91c1c"
+        return "badge-high"
     if score >= 4.0:
-        return "#b45309"
-    return "#15803d"
+        return "badge-medium"
+    return "badge-low"
 
 
 def _extract_metrics_series(samples: List[Dict]) -> Dict[str, List]:
@@ -320,7 +320,7 @@ def generate_report(
 
     cvss_context = {
         "base": base_cvss, "behavior": behavior_impact, "hybrid": hybrid_cvss,
-        "badge_color": _cvss_badge_color(hybrid_cvss),
+        "badge_class": _cvss_badge_class(hybrid_cvss),
         "explanation": "Hybrid CVSS combines exploit evidence (base severity) with observed runtime behavior (CPU/memory/DB latency/log impact) using weighted scoring.",
         "weights": {"base": 0.6, "behavior": 0.4},
     }
