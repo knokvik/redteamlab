@@ -61,15 +61,44 @@ def resolve_container_name(project: str, service_name: str, service_cfg: Dict) -
     return f"{project}-{service_name}-1"
 
 
-def compose_up(compose_files: List[Path], project_name: str) -> None:
+def _print_build_failure_help(project_name: str, build_images: bool) -> None:
+    if build_images:
+        console.print(
+            "[yellow]Docker image build failed. If you see Buildx permission issues, try:[/yellow]\n"
+            "  [cyan]docker builder prune -af[/cyan]\n"
+            "  [cyan]rm -rf ~/.docker/buildx[/cyan]\n"
+            f"  [cyan]python3 cli.py run <repo-url> --project-name {project_name}[/cyan]\n"
+            "Or skip image rebuild if images already exist:\n"
+            f"  [cyan]python3 cli.py run <repo-url> --project-name {project_name} --no-build[/cyan]"
+        )
+    else:
+        console.print(
+            "[yellow]Compose startup failed in --no-build mode. If images are missing, rerun without --no-build.[/yellow]"
+        )
+
+
+def compose_up(compose_files: List[Path], project_name: str, build_images: bool = True) -> bool:
     console.print("[bold cyan]Bringing up lab stack with docker compose...[/bold cyan]")
 
     cmd = ["docker", "compose", "-p", project_name]
     for compose_file in compose_files:
         cmd.extend(["-f", str(compose_file)])
-    cmd.extend(["up", "-d", "--build", "--remove-orphans"])
+    cmd.extend(["up", "-d", "--remove-orphans"])
+    if build_images:
+        cmd.append("--build")
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True
+    except subprocess.CalledProcessError as exc:
+        output = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+        lowered = output.lower()
+        if "buildx" in lowered or "operation not permitted" in lowered:
+            console.print("[red]Docker Buildx permission issue detected during compose startup.[/red]")
+        else:
+            console.print("[red]docker compose up failed.[/red]")
+        _print_build_failure_help(project_name=project_name, build_images=build_images)
+        return False
 
 
 def ensure_running(client: docker.DockerClient, container_name: str) -> docker.models.containers.Container:
@@ -134,7 +163,12 @@ def run_connectivity_checks(
     return failures
 
 
-def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", skip_compose_up: bool = False) -> int:
+def run_lab(
+    compose_files: List[Path | str],
+    project_name: str = "devredteam",
+    skip_compose_up: bool = False,
+    build_images: bool = True,
+) -> int:
     resolved_compose_files = [Path(path).resolve() for path in compose_files]
 
     for compose_file in resolved_compose_files:
@@ -149,7 +183,9 @@ def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", s
         return 1
 
     if not skip_compose_up:
-        compose_up(resolved_compose_files, project_name)
+        started = compose_up(resolved_compose_files, project_name, build_images=build_images)
+        if not started:
+            return 1
 
     client = docker.from_env()
     attacker_container_name = resolve_container_name(project_name, "attacker", services["attacker"])

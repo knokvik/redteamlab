@@ -27,6 +27,11 @@ def parse_args() -> argparse.Namespace:
     run_cmd = sub.add_parser("run", help="Clone a target repository and launch the lab")
     run_cmd.add_argument("github_url", help="GitHub repository URL")
     run_cmd.add_argument("--project-name", default="devredteam", help="Docker Compose project name")
+    run_cmd.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Skip Docker image build and start existing images only",
+    )
     mode_group = run_cmd.add_mutually_exclusive_group()
     mode_group.add_argument("--safe", action="store_true", help="Run in safe mode (default)")
     mode_group.add_argument("--aggressive", action="store_true", help="Run in aggressive mode")
@@ -43,7 +48,7 @@ def _open_report(report_path: Path) -> None:
         console.print(f"[yellow]Report location:[/yellow] {report_path}")
 
 
-def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
+def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool = False) -> int:
     from core import orchestrator
     from docker_generator import generate_compose_for_repo
     from dummy_data_seeder import seed_dummy_data
@@ -105,11 +110,16 @@ def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
         progress.advance(task)
 
         progress.update(task, description="[cyan]4/9 Starting containers[/cyan]")
+        if no_build:
+            console.print("[bold yellow]Skipping image build (--no-build). Using existing images.[/bold yellow]")
+        else:
+            console.print("[bold cyan]Building attacker image (first run may take 30-90s)...[/bold cyan]")
         try:
             status = orchestrator.run_lab(
                 compose_files=[compose_file],
                 project_name=project_name,
                 skip_compose_up=False,
+                build_images=not no_build,
             )
         except Exception as exc:
             console.print(f"[red]Failed to start lab stack:[/red] {exc}")
@@ -170,6 +180,9 @@ def run_pipeline(github_url: str, project_name: str, mode: str) -> int:
     )
     if report_path:
         _open_report(Path(report_path))
+        console.print(f"[bold green]Report generated at:[/bold green] {report_path}")
+    else:
+        console.print("[yellow]No report was generated.[/yellow]")
     console.print("[bold green]Pipeline complete.[/bold green]")
     return 0
 
@@ -179,7 +192,7 @@ def main() -> int:
 
     if args.command == "run":
         mode = "aggressive" if args.aggressive else "safe"
-        return run_pipeline(args.github_url, args.project_name, mode)
+        return run_pipeline(args.github_url, args.project_name, mode, no_build=args.no_build)
 
     return 1
 
