@@ -1,4 +1,8 @@
-"""Detect high-level application stack details from a cloned repository."""
+"""Detect high-level application stack details from a cloned repository.
+
+Enhanced with deeper file introspection, auth framework detection, and
+support for MongoDB/Redis/SQLite/Elasticsearch in addition to Postgres/MySQL.
+"""
 
 from __future__ import annotations
 
@@ -32,11 +36,16 @@ def _package_dependencies(package_json_path: Path) -> set[str]:
     return {item.lower() for item in deps}
 
 
-def _discover_candidate_dirs(repo_path: Path) -> List[Path]:
+def _discover_candidate_dirs(repo_path: Path, max_depth: int = 2) -> List[Path]:
+    """Discover candidate directories up to max_depth levels deep."""
     candidates = [repo_path]
     for child in repo_path.iterdir():
-        if child.is_dir() and not child.name.startswith("."):
+        if child.is_dir() and not child.name.startswith(".") and child.name not in ("node_modules", "vendor", "__pycache__", ".git", "dist", "build"):
             candidates.append(child)
+            if max_depth > 1:
+                for grandchild in child.iterdir():
+                    if grandchild.is_dir() and not grandchild.name.startswith(".") and grandchild.name not in ("node_modules", "vendor", "__pycache__"):
+                        candidates.append(grandchild)
     return candidates
 
 
@@ -79,8 +88,16 @@ def _matches_fingerprint(directory: Path, fingerprint: Dict) -> Tuple[bool, List
                 _read_text(directory / "requirements.txt"),
                 _read_text(directory / "pyproject.toml"),
                 _read_text(directory / "docker-compose.yml"),
+                _read_text(directory / "docker-compose.yaml"),
                 _read_text(directory / ".env"),
+                _read_text(directory / ".env.example"),
                 _read_text(directory / "package.json"),
+                _read_text(directory / "Gemfile"),
+                _read_text(directory / "go.mod"),
+                _read_text(directory / "pom.xml"),
+                _read_text(directory / "build.gradle"),
+                _read_text(directory / "composer.json"),
+                _read_text(directory / "Cargo.toml"),
             ]
         ).lower()
         if not any(term in haystack for term in any_text):
@@ -88,6 +105,44 @@ def _matches_fingerprint(directory: Path, fingerprint: Dict) -> Tuple[bool, List
         evidence.append(f"{directory}::text-match")
 
     return True, evidence
+
+
+def _detect_exposed_ports(repo_path: Path) -> List[Dict]:
+    """Scan Dockerfiles and compose files for exposed ports."""
+    ports = []
+    for compose_name in ("docker-compose.yml", "docker-compose.yaml"):
+        compose_path = repo_path / compose_name
+        if compose_path.exists():
+            content = _read_text(compose_path)
+            import re
+            for match in re.finditer(r"['\"]?(\d+):(\d+)['\"]?", content):
+                ports.append({"host": int(match.group(1)), "container": int(match.group(2)), "source": compose_name})
+
+    dockerfile = repo_path / "Dockerfile"
+    if dockerfile.exists():
+        content = _read_text(dockerfile)
+        import re
+        for match in re.finditer(r"EXPOSE\s+(\d+)", content):
+            ports.append({"container": int(match.group(1)), "source": "Dockerfile"})
+
+    return ports
+
+
+def _detect_env_variables(repo_path: Path) -> Dict:
+    """Scan for environment variable patterns that reveal architecture."""
+    env_info = {"has_env": False, "database_urls": [], "api_keys_referenced": False, "secrets_referenced": False}
+    for env_file in (".env", ".env.example", ".env.sample", ".env.local"):
+        env_path = repo_path / env_file
+        if env_path.exists():
+            env_info["has_env"] = True
+            content = _read_text(env_path).lower()
+            if "database_url" in content or "db_host" in content:
+                env_info["database_urls"].append(env_file)
+            if "api_key" in content or "apikey" in content:
+                env_info["api_keys_referenced"] = True
+            if "secret" in content or "jwt" in content or "token" in content:
+                env_info["secrets_referenced"] = True
+    return env_info
 
 
 def detect_stack(repo_path: Path | str, fingerprints_path: Path | str | None = None) -> Dict:
@@ -117,11 +172,37 @@ def detect_stack(repo_path: Path | str, fingerprints_path: Path | str | None = N
     frontend = next((d for d in detections if d["role"] == "frontend"), None)
     backend = next((d for d in detections if d["role"] == "backend"), None)
 
+    # Database detection — support full range
     db_type = None
-    if any(d["name"] == "postgres" for d in detections):
-        db_type = "postgres"
-    elif any(d["name"] == "mysql" for d in detections):
-        db_type = "mysql"
+    db_priority = ["postgres", "mysql", "mongodb", "sqlite"]
+    for db_name in db_priority:
+        if any(d["name"] == db_name for d in detections):
+            db_type = db_name
+            break
+
+    # Cache/queue detection
+    cache_type = None
+    if any(d["name"] == "redis" for d in detections):
+        cache_type = "redis"
+
+    # Auth detection
+    auth_methods = []
+    if any(d["name"] == "jwt-auth" for d in detections):
+        auth_methods.append("jwt")
+    if any(d["name"] == "oauth" for d in detections):
+        auth_methods.append("oauth")
+
+    # API style detection
+    api_style = "rest"
+    if any(d["name"] == "graphql" for d in detections):
+        api_style = "graphql"
+
+    # Self-containerized detection
+    has_own_docker = any(d["name"] == "docker-self" for d in detections)
+
+    # Port and env analysis
+    exposed_ports = _detect_exposed_ports(repo_dir)
+    env_info = _detect_env_variables(repo_dir)
 
     return {
         "repo_path": str(repo_dir),
@@ -141,4 +222,15 @@ def detect_stack(repo_path: Path | str, fingerprints_path: Path | str | None = N
             "detected": db_type is not None,
             "type": db_type,
         },
+        "cache": {
+            "detected": cache_type is not None,
+            "type": cache_type,
+        },
+        "auth": {
+            "methods": auth_methods,
+        },
+        "api_style": api_style,
+        "has_own_docker": has_own_docker,
+        "exposed_ports": exposed_ports,
+        "env_info": env_info,
     }
