@@ -141,6 +141,9 @@ class RemoteLLMClient:
             "vuln_scan": (
                 "Focus on vulnerability scanning: run nuclei templates for known CVEs, check for misconfigurations, "
                 "test SSL/TLS weaknesses, probe for OWASP Top 10. Use nuclei, nikto, sslscan. "
+                "NUCLEI TEMPLATES AVAILABLE at /root/nuclei-templates/ with these categories: "
+                "cves/, vulnerabilities/, misconfiguration/, exposures/, default-logins/, takeovers/, technologies/. "
+                "You can specify a template directory with -t /root/nuclei-templates/<category>. "
                 "Identify concrete exploitable vulnerabilities."
             ),
             "exploit": (
@@ -148,6 +151,8 @@ class RemoteLLMClient:
                 "XSS (reflected, stored, DOM), SSTI, command injection, LFI/RFI, SSRF, IDOR, "
                 "authentication bypass, deserialization attacks. Chain vulnerabilities from prior phases. "
                 "Use sqlmap with advanced tampering, nuclei exploit templates, custom curl payloads. "
+                "NUCLEI TEMPLATES at /root/nuclei-templates/cves/ and /root/nuclei-templates/vulnerabilities/ "
+                "contain exploit-ready templates — use -t to target specific ones. "
                 "Think creatively — combine findings from recon to maximize impact."
             ),
             "post_exploit": (
@@ -320,9 +325,14 @@ class RemoteLLMClient:
             "available_tools": [
                 t for t, info in TOOL_REGISTRY.items() if attack_phase in info["phases"]
             ],
+            "nuclei_template_categories": [
+                "cves", "vulnerabilities", "misconfiguration", "exposures",
+                "default-logins", "takeovers", "technologies",
+            ],
+            "nuclei_template_base": "/root/nuclei-templates",
             "schema": {
                 "required": ["plan", "payload", "tool", "command_suggestion"],
-                "optional": [],
+                "optional": ["nuclei_template"],
             },
         }
 

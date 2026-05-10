@@ -222,9 +222,18 @@ def _build_enum_command(tool: str, base_url: str, attempt_id: str, context: Atta
 def _build_vuln_command(tool: str, base_url: str, attempt_id: str, context: AttackContext) -> str:
     """Build commands for vulnerability scanning phase."""
     if tool == "nuclei":
+        # Use curated template directories for focused scanning
+        template_dirs = [
+            "/root/nuclei-templates/cves",
+            "/root/nuclei-templates/vulnerabilities",
+            "/root/nuclei-templates/misconfiguration",
+            "/root/nuclei-templates/exposures",
+            "/root/nuclei-templates/default-logins",
+        ]
+        template_args = " ".join(f"-t {d}" for d in template_dirs)
         return (
             f"nuclei -u '{base_url}' -H 'X-RedTeam-ID: {attempt_id}' -silent -nc "
-            f"-severity low,medium,high,critical -t /root/nuclei-templates/ 2>/dev/null || "
+            f"-severity low,medium,high,critical {template_args} 2>/dev/null || "
             f"nuclei -u '{base_url}' -H 'X-RedTeam-ID: {attempt_id}' -silent -nc"
         )
     if tool == "nikto":
@@ -256,7 +265,8 @@ def _build_exploit_command(
     if tool == "nuclei":
         return (
             f"nuclei -u '{base_url}' -H 'X-RedTeam-ID: {attempt_id}' -silent -nc "
-            f"-severity high,critical"
+            f"-severity high,critical "
+            f"-t /root/nuclei-templates/cves -t /root/nuclei-templates/vulnerabilities"
         )
     if tool == "metasploit":
         # MSF console one-liner for common web exploits
