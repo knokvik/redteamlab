@@ -11,6 +11,19 @@ from typing import Dict, List
 import networkx as nx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from core.cvss_calculator import (
+    CVSSVector,
+    BehaviorAnalysis,
+    auto_detect_vector,
+    analyze_behavior,
+    compute_base_score,
+    compute_ebss,
+    finding_score,
+    severity_class,
+    severity_rating,
+    vector_for_cwe,
+)
+
 try:
     import plotly.graph_objects as go
     import plotly.io as pio
@@ -107,13 +120,7 @@ def _behavior_impact_score(observability_summary: Dict, attempt_correlations: Di
 
 
 def _cvss_badge_class(score: float) -> str:
-    if score >= 9.0:
-        return "badge-critical"
-    if score >= 7.0:
-        return "badge-high"
-    if score >= 4.0:
-        return "badge-medium"
-    return "badge-low"
+    return severity_class(score)
 
 
 def _extract_metrics_series(samples: List[Dict]) -> Dict[str, List]:
@@ -232,19 +239,25 @@ def _llm_summary(attacks: List[Dict]) -> Dict:
 
 
 def _build_findings(attacks: List[Dict]) -> List[Dict]:
-    """Build structured findings with CWE and CVSS vectors."""
+    """Build structured findings with CWE, CVSS vectors, and per-finding scores."""
     findings = []
     for attack in attacks:
         if not attack.get("success"):
             continue
         classification = _classify_finding(attack)
+        cwe_id = classification["cwe"]["id"]
+        vec = vector_for_cwe(cwe_id)
+        score = vec.base_score()
         findings.append({
             "attempt": attack.get("attempt"),
             "phase": attack.get("phase", "exploit"),
             "tool": attack.get("tool"),
-            "cwe_id": classification["cwe"]["id"],
+            "cwe_id": cwe_id,
             "cwe_name": classification["cwe"]["name"],
-            "cvss_vector": f"CVSS:3.1/{classification['cwe']['cvss_vector']}",
+            "cvss_vector": vec.vector_string(),
+            "cvss_score": score,
+            "cvss_severity": severity_rating(score),
+            "cvss_badge_class": severity_class(score),
             "finding_type": classification["type"],
             "payload": str(attack.get("payload", ""))[:100],
             "evidence": str(attack.get("output", ""))[:300],
@@ -271,9 +284,19 @@ def generate_report(
     correlations = observability_result.get("attempt_correlations", {})
     attack_context = attack_result.get("attack_context", {})
 
-    base_cvss = _base_cvss_from_attacks(attacks)
-    behavior_impact = _behavior_impact_score(summary, correlations, attacks)
-    hybrid_cvss = round((base_cvss * 0.6) + (behavior_impact * 0.4), 2)
+    # ── CVSS v3.1 auto-detection ──────────────────────────────────────────
+    attack_ctx = attack_result.get("attack_context", {})
+    cvss_vector = auto_detect_vector(attacks, summary, attack_ctx)
+    base_cvss_auto = cvss_vector.base_score()
+
+    # Legacy heuristic scores (kept for comparison)
+    base_cvss_heuristic = _base_cvss_from_attacks(attacks)
+    behavior_impact_heuristic = _behavior_impact_score(summary, correlations, attacks)
+    hybrid_cvss = round((base_cvss_heuristic * 0.6) + (behavior_impact_heuristic * 0.4), 2)
+
+    # ── EBSS calculation ─────────────────────────────────────────────────
+    behavior_analysis = analyze_behavior(summary, attack_ctx)
+    ebss = compute_ebss(base_cvss_auto, behavior_analysis)
 
     before_graph = crawl_result.get("graph", {"nodes": [], "edges": []})
     after_graph = _enrich_after_graph(before_graph, attacks)
@@ -319,10 +342,25 @@ def generate_report(
         timeline.append(row)
 
     cvss_context = {
-        "base": base_cvss, "behavior": behavior_impact, "hybrid": hybrid_cvss,
+        "base": base_cvss_heuristic,
+        "behavior": behavior_impact_heuristic,
+        "hybrid": hybrid_cvss,
         "badge_class": _cvss_badge_class(hybrid_cvss),
         "explanation": "Hybrid CVSS combines exploit evidence (base severity) with observed runtime behavior (CPU/memory/DB latency/log impact) using weighted scoring.",
         "weights": {"base": 0.6, "behavior": 0.4},
+        # CVSS v3.1 auto-detected vector
+        "auto_vector": cvss_vector.vector_string(),
+        "auto_score": base_cvss_auto,
+        "auto_severity": severity_rating(base_cvss_auto),
+        "auto_badge_class": severity_class(base_cvss_auto),
+        "vector_breakdown": cvss_vector.breakdown(),
+        # EBSS
+        "ebss": ebss,
+        "ebss_badge_class": severity_class(ebss),
+        "ebss_severity": severity_rating(ebss),
+        "behavior_severity": behavior_analysis.severity,
+        "behavior_severity_label": behavior_analysis.severity_label,
+        "behavior_signals": behavior_analysis.signals,
     }
 
     template_dir = Path(__file__).resolve().parents[1] / "templates"
