@@ -57,7 +57,24 @@ RUN mkdir -p /opt/wordlists && \
     curl -sSL https://github.com/danielmiessler/SecLists/archive/refs/heads/master.tar.gz \
     | tar xz -C /opt/wordlists --strip-components=1
 
-# ---- Layer 6: Custom attack scripts directory ----
+# ---- Layer 6: Nuclei templates (curated web-relevant subset) ----
+RUN mkdir -p /root/nuclei-templates && \
+    cd /tmp && \
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/projectdiscovery/nuclei-templates.git && \
+    cd nuclei-templates && \
+    git sparse-checkout set \
+        http/cves \
+        http/vulnerabilities \
+        http/misconfiguration \
+        http/exposures \
+        http/default-logins \
+        http/takeovers \
+        http/technologies && \
+    cp -r http/* /root/nuclei-templates/ && \
+    cd / && rm -rf /tmp/nuclei-templates
+
+# ---- Layer 7: Custom attack scripts directory ----
 COPY scripts/ /opt/attack-scripts/
 RUN chmod +x /opt/attack-scripts/*.sh 2>/dev/null || true
 
@@ -71,5 +88,6 @@ WORKDIR /home/attacker/work
 
 ENV PATH="/opt/attack-scripts:$PATH"
 ENV SECLISTS="/opt/wordlists"
+ENV NUCLEI_TEMPLATES="/root/nuclei-templates"
 
 CMD ["sleep", "infinity"]
