@@ -345,6 +345,11 @@ def _maybe_use_llm_command(command_suggestion: str, base_url: str, attempt_id: s
         ":(){:|:&};:",
         "mkfs.",
         "dd if=/dev/zero",
+        "docker ",
+        "podman ",
+        "kubectl ",
+        "mount ",
+        "umount ",
     ]
     low = raw.lower()
     if any(token in low for token in denied):

@@ -86,6 +86,8 @@ class RemoteLLMClient:
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.35"))
         self.top_p = float(os.getenv("LLM_TOP_P", "0.9"))
         self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "1800"))
+        self.presence_penalty = float(os.getenv("LLM_PRESENCE_PENALTY", "0.1"))
+        self.frequency_penalty = float(os.getenv("LLM_FREQUENCY_PENALTY", "0.1"))
         self._conversation_history: List[Dict] = []
 
     def _resolved_api_style(self) -> str:
@@ -143,15 +145,15 @@ class RemoteLLMClient:
 
         if mode == "aggressive":
             return (
-                "You are an elite red-team operator running authorized local penetration testing. "
+                "You are an elite local red-team simulation assistant for authorized testing in isolated Docker labs. "
                 f"Current attack phase: {phase.upper()}. "
                 f"{base_prompt} "
-                "IMPORTANT: Think step-by-step. Analyze the accumulated context from prior phases. "
+                "IMPORTANT: Analyze accumulated context from prior phases and chain findings. "
                 "Chain findings together — if recon found open ports, enumerate them. "
                 "If enumeration found endpoints, probe them for vulnerabilities. "
-                "If vulnerabilities were found, exploit them. "
-                "Return strict JSON: {plan, payload, tool, command_suggestion, goal_stage, expected_signal, confidence, reasoning}. "
-                "The 'reasoning' field should explain your chain-of-thought. "
+                "If vulnerabilities were found, validate exploitability safely inside the attacker container only. "
+                'Return valid JSON only with exactly 4 keys: "plan", "payload", "tool", "command_suggestion". '
+                "No markdown, no code fences, no extra keys. "
                 "All targets must be localhost/127.0.0.1 only."
             )
         return (
@@ -159,8 +161,9 @@ class RemoteLLMClient:
             f"Current attack phase: {phase.upper()}. "
             f"{base_prompt} "
             "Think methodically. Analyze prior phase results before suggesting next steps. "
-            "Return strict JSON: {plan, payload, tool, command_suggestion, goal_stage, expected_signal, confidence, reasoning}. "
-            "Prefer validation probes before destructive tests. Target localhost only."
+            'Return valid JSON only with exactly 4 keys: "plan", "payload", "tool", "command_suggestion". '
+            "No markdown, no code fences, no extra keys. "
+            "Prefer validation probes before aggressive actions. Target localhost only."
         )
 
     @staticmethod
@@ -297,7 +300,7 @@ class RemoteLLMClient:
             ],
             "schema": {
                 "required": ["plan", "payload", "tool", "command_suggestion"],
-                "optional": ["goal_stage", "expected_signal", "confidence", "reasoning"],
+                "optional": [],
             },
         }
 
@@ -351,6 +354,8 @@ class RemoteLLMClient:
             "temperature": self.temperature,
             "top_p": self.top_p,
             "max_tokens": self.max_tokens,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
         }
 
         # Ask server for JSON output where supported.
@@ -453,7 +458,7 @@ class RemoteLLMClient:
                 phase=attack_phase,
             )
 
-        system_prompt = self._system_prompt(mode, attack_phase)
+        system_prompt = os.getenv("LLM_SYSTEM_PROMPT") or self._system_prompt(mode, attack_phase)
         stack_snapshot = stack_snapshot or {}
         target_urls = target_urls or [base_url]
 
