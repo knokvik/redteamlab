@@ -64,6 +64,28 @@ TOOL_REGISTRY = {
 
 
 class RemoteLLMClient:
+    @staticmethod
+    def _normalize_host(raw_host: str) -> str:
+        """Normalize user-provided host URLs to a callable API base.
+
+        Accepts pasted URLs such as:
+        - http://host:1234/v1/models
+        - http://host:1234/v1/chat/completions
+        - http://host:11434/api/generate
+        """
+        host = (raw_host or "").strip().rstrip("/")
+        suffixes = [
+            "/v1/models",
+            "/v1/chat/completions",
+            "/api/generate",
+            "/models",
+        ]
+        for suffix in suffixes:
+            if host.endswith(suffix):
+                host = host[: -len(suffix)]
+                break
+        return host.rstrip("/")
+
     def __init__(self, host: str | None = None, model: str | None = None, timeout_s: int = 30):
         env_host = (
             host
@@ -72,7 +94,7 @@ class RemoteLLMClient:
             or os.getenv("LMSTUDIO_HOST")
             or "http://localhost:11434"
         )
-        self.host = env_host.rstrip("/")
+        self.host = self._normalize_host(env_host)
         # LLM_API_STYLE: auto | ollama | openai
         self.api_style = (os.getenv("LLM_API_STYLE") or "auto").strip().lower()
         self.model = (
