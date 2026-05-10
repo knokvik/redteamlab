@@ -50,8 +50,8 @@ def _open_report(report_path: Path) -> None:
 
 def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool = False) -> int:
     from core import orchestrator
+    from core.setup_orchestrator import finalize_smart_setup, prepare_smart_setup
     from docker_generator import generate_compose_for_repo
-    from dummy_data_seeder import seed_dummy_data
     from github_cloner import clone_repo
     from stack_detector import detect_stack
 
@@ -107,6 +107,11 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
             base_compose_path=BASE_COMPOSE,
         )
         compose_file = Path(generated["compose_file"])
+        setup_prepared = prepare_smart_setup(
+            repo_path=repo_path,
+            compose_file=compose_file,
+            detection=detection,
+        )
         progress.advance(task)
 
         progress.update(task, description="[cyan]4/9 Starting containers[/cyan]")
@@ -128,8 +133,21 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
             return status
         progress.advance(task)
 
-        progress.update(task, description="[cyan]5/9 Seeding dummy data[/cyan]")
-        seed_result = seed_dummy_data(compose_file=compose_file, project_name=project_name)
+        progress.update(task, description="[cyan]5/9 Smart setup (migrate + seed + health checks)[/cyan]")
+        setup_result = finalize_smart_setup(
+            repo_path=repo_path,
+            compose_file=compose_file,
+            project_name=project_name,
+            prepared=setup_prepared,
+        )
+        if setup_result.get("smart_db_mode") and not setup_result.get("ready"):
+            console.print("[red]Smart DB Setup Mode did not reach healthy state. Aborting attack phase.[/red]")
+            health = setup_result.get("health", {})
+            for check in health.get("checks", []):
+                console.print(
+                    f"  - {check.get('check')}: {'OK' if check.get('ok') else 'FAILED'} | {check.get('value', '')}"
+                )
+            return 1
         progress.advance(task)
 
         progress.update(task, description="[cyan]6-9 Crawling, attacks, observability, report[/cyan]")
@@ -162,11 +180,16 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
     vuln_count = len(attack_context.get("vulnerabilities", []))
     paths_found = len(attack_context.get("discovered_paths", []))
     ports_found = len(attack_context.get("open_ports", []))
+    seed_result = setup_result.get("seed", {})
+    setup_mode = bool(setup_result.get("smart_db_mode"))
     seed_note = (
         f"Seeded {seed_result.get('db_type')} in {seed_result.get('service')}"
         if seed_result.get("seeded")
         else f"Seeder skipped: {seed_result.get('reason', 'unknown')}"
     )
+    setup_ready = bool(setup_result.get("ready"))
+    runtime = setup_result.get("runtime", {})
+    expected_db_port = runtime.get("expected_db_host_port")
     console.print(f"Detected technologies: {', '.join(detection['technologies']) or 'none'}")
     console.print(seed_note)
     console.print(
@@ -175,6 +198,8 @@ def run_pipeline(github_url: str, project_name: str, mode: str, no_build: bool =
                 [
                     f"Mode: [bold]{mode}[/bold]",
                     f"Target URL: [bold]{pipeline.get('target_url', 'n/a')}[/bold]",
+                    f"Smart DB Setup Mode: [bold]{setup_mode}[/bold] | Ready: [bold]{setup_ready}[/bold]",
+                    f"Expected DB host port: [bold]{expected_db_port if expected_db_port else 'default'}[/bold]",
                     f"Phases: [bold]{' → '.join(phases_executed) or 'none'}[/bold]",
                     f"Total attempts: [bold]{len(attacks)}[/bold]",
                     f"Hybrid CVSS: [bold]{hybrid_cvss}[/bold]",
