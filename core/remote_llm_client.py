@@ -1,4 +1,9 @@
-"""Remote Ollama client with multi-phase awareness, chain-of-thought reasoning, and behavioral feedback loop."""
+"""Remote LLM client with multi-phase awareness and robust provider support.
+
+Supports:
+- Ollama native endpoint: /api/generate
+- OpenAI-compatible chat endpoint (LM Studio, proxies): /v1/chat/completions
+"""
 
 from __future__ import annotations
 
@@ -7,10 +12,11 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 DEFAULT_MODEL = "llama3.1:8b"
+DEFAULT_LMSTUDIO_MODEL = "local-model"
 
 
 @dataclass
@@ -59,10 +65,36 @@ TOOL_REGISTRY = {
 
 class RemoteLLMClient:
     def __init__(self, host: str | None = None, model: str | None = None, timeout_s: int = 30):
-        self.host = (host or os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
-        self.model = model or os.getenv("OLLAMA_MODEL") or DEFAULT_MODEL
+        env_host = (
+            host
+            or os.getenv("LLM_HOST")
+            or os.getenv("OLLAMA_HOST")
+            or os.getenv("LMSTUDIO_HOST")
+            or "http://localhost:11434"
+        )
+        self.host = env_host.rstrip("/")
+        # LLM_API_STYLE: auto | ollama | openai
+        self.api_style = (os.getenv("LLM_API_STYLE") or "auto").strip().lower()
+        self.model = (
+            model
+            or os.getenv("OLLAMA_MODEL")
+            or os.getenv("LLM_MODEL")
+            or os.getenv("LMSTUDIO_MODEL")
+            or (DEFAULT_LMSTUDIO_MODEL if self._resolved_api_style() == "openai" else DEFAULT_MODEL)
+        )
         self.timeout_s = timeout_s
+        self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.35"))
+        self.top_p = float(os.getenv("LLM_TOP_P", "0.9"))
+        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "1800"))
         self._conversation_history: List[Dict] = []
+
+    def _resolved_api_style(self) -> str:
+        if self.api_style in {"ollama", "openai"}:
+            return self.api_style
+        host = self.host.lower()
+        if host.endswith("/v1") or ":1234" in host or "lmstudio" in host:
+            return "openai"
+        return "ollama"
 
     @staticmethod
     def _is_localhost_url(candidate: str) -> bool:
@@ -198,6 +230,11 @@ class RemoteLLMClient:
     @staticmethod
     def _extract_json(text: str) -> Dict:
         text = text.strip()
+        # Strip code fences if model wraps JSON in markdown.
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json|bash|python)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -226,6 +263,109 @@ class RemoteLLMClient:
         except (TypeError, ValueError):
             confidence = 0.5
         return max(0.0, min(1.0, confidence))
+
+    @staticmethod
+    def _sanitize_command_suggestion(command_suggestion: str) -> str:
+        raw = (command_suggestion or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json|bash|python|sh)?\s*", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*```$", "", raw)
+        return raw.strip()
+
+    def _build_context_envelope(
+        self,
+        attempt_idx: int,
+        attack_phase: str,
+        mode: str,
+        base_url: str,
+        target_urls: List[str],
+        stack_snapshot: Dict,
+        graph_snapshot: Dict,
+        accumulated_intel: str,
+    ) -> Dict:
+        return {
+            "attempt": attempt_idx,
+            "phase": attack_phase,
+            "mode": mode,
+            "base_url": base_url,
+            "target_urls": target_urls,
+            "stack": stack_snapshot,
+            "graph": graph_snapshot,
+            "accumulated_intelligence": accumulated_intel,
+            "available_tools": [
+                t for t, info in TOOL_REGISTRY.items() if attack_phase in info["phases"]
+            ],
+            "schema": {
+                "required": ["plan", "payload", "tool", "command_suggestion"],
+                "optional": ["goal_stage", "expected_signal", "confidence", "reasoning"],
+            },
+        }
+
+    def _call_ollama(self, system_prompt: str, context_envelope: Dict) -> Dict:
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "system": system_prompt,
+            "prompt": json.dumps(context_envelope, indent=2),
+            "options": {
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            },
+        }
+        if self._conversation_history:
+            payload["context"] = self._conversation_history[-3:]
+
+        import requests
+
+        response = requests.post(
+            f"{self.host}/api/generate",
+            json=payload,
+            timeout=self.timeout_s,
+        )
+        response.raise_for_status()
+        body = response.json()
+        context_token = body.get("context")
+        if context_token:
+            self._conversation_history.append(context_token)
+        return body
+
+    def _call_openai_chat(self, system_prompt: str, context_envelope: Dict) -> Dict:
+        # LM Studio expects /v1/chat/completions with messages.
+        host = self.host
+        if host.endswith("/v1"):
+            endpoint = f"{host}/chat/completions"
+        else:
+            endpoint = f"{host}/v1/chat/completions"
+
+        headers = {"Content-Type": "application/json"}
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LMSTUDIO_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(context_envelope, indent=2)},
+            ],
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+        }
+
+        # Ask server for JSON output where supported.
+        payload["response_format"] = {"type": "json_object"}
+
+        import requests
+
+        response = requests.post(
+            endpoint,
+            json=payload,
+            headers=headers,
+            timeout=self.timeout_s,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def _build_conversation_context(
         self,
@@ -324,53 +464,32 @@ class RemoteLLMClient:
             observability_snapshot=observability_snapshot,
         )
 
-        context_envelope = {
-            "attempt": attempt_idx,
-            "phase": attack_phase,
-            "mode": mode,
-            "base_url": base_url,
-            "target_urls": target_urls,
-            "stack": stack_snapshot,
-            "graph": graph_snapshot,
-            "accumulated_intelligence": accumulated_intel,
-            "available_tools": [
-                t for t, info in TOOL_REGISTRY.items()
-                if attack_phase in info["phases"]
-            ],
-            "schema": {
-                "required": ["plan", "payload", "tool", "command_suggestion"],
-                "optional": ["goal_stage", "expected_signal", "confidence", "reasoning"],
-            },
-        }
-
-        payload = {
-            "model": self.model,
-            "stream": False,
-            "system": system_prompt,
-            "prompt": json.dumps(context_envelope, indent=2),
-        }
-
-        # Append conversation history for multi-turn context
-        if self._conversation_history:
-            payload["context"] = self._conversation_history[-3:]  # Last 3 turns
+        context_envelope = self._build_context_envelope(
+            attempt_idx=attempt_idx,
+            attack_phase=attack_phase,
+            mode=mode,
+            base_url=base_url,
+            target_urls=target_urls,
+            stack_snapshot=stack_snapshot,
+            graph_snapshot=graph_snapshot,
+            accumulated_intel=accumulated_intel,
+        )
 
         try:
             warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
-            import requests
-
-            response = requests.post(
-                f"{self.host}/api/generate",
-                json=payload,
-                timeout=self.timeout_s,
-            )
-            response.raise_for_status()
-            body = response.json()
-            raw_text = body.get("response", "")
-
-            # Store conversation context for multi-turn
-            context_token = body.get("context")
-            if context_token:
-                self._conversation_history.append(context_token)
+            style = self._resolved_api_style()
+            if style == "openai":
+                body = self._call_openai_chat(system_prompt, context_envelope)
+                raw_text = (
+                    body.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                source_name = "remote-openai-compat"
+            else:
+                body = self._call_ollama(system_prompt, context_envelope)
+                raw_text = body.get("response", "")
+                source_name = "remote-ollama"
 
             parsed = self._extract_json(raw_text)
             validation_notes: List[str] = []
@@ -379,7 +498,7 @@ class RemoteLLMClient:
                 if field not in parsed or not parsed[field]:
                     raise ValueError(f"Missing field: {field}")
 
-            command_suggestion = str(parsed["command_suggestion"]).strip()
+            command_suggestion = self._sanitize_command_suggestion(str(parsed["command_suggestion"]))
             if "http://" in command_suggestion or "https://" in command_suggestion:
                 if "localhost" not in command_suggestion and "127.0.0.1" not in command_suggestion:
                     raise ValueError("command_suggestion includes non-localhost URL")
@@ -398,7 +517,7 @@ class RemoteLLMClient:
                 payload=str(parsed["payload"]),
                 tool=normalized_tool,
                 command_suggestion=command_suggestion,
-                source="remote-ollama",
+                source=source_name,
                 goal_stage=str(parsed.get("goal_stage") or attack_phase),
                 expected_signal=str(parsed.get("expected_signal") or "status_or_error_shift"),
                 confidence=self._coerce_confidence(parsed.get("confidence", 0.6)),

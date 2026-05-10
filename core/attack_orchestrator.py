@@ -11,6 +11,8 @@ Implements the full attack lifecycle:
 
 from __future__ import annotations
 
+import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -302,6 +304,67 @@ def _build_stress_command(base_url: str, attempt_id: str, context: AttackContext
     )
 
 
+def _is_localhost_command(command: str) -> bool:
+    for host in re.findall(r"https?://([^\s/'\"]+)", command):
+        host = host.strip().lower()
+        if host not in {"localhost", "127.0.0.1", "[::1]"}:
+            return False
+    return True
+
+
+def _maybe_use_llm_command(command_suggestion: str, base_url: str, attempt_id: str) -> str | None:
+    """Return a safe shell command from LLM suggestion when enabled.
+
+    Controlled by DEVREDTEAM_USE_LLM_COMMAND (default: 1).
+    """
+    enabled = os.getenv("DEVREDTEAM_USE_LLM_COMMAND", "1").strip().lower() not in {"0", "false", "no"}
+    if not enabled:
+        return None
+
+    raw = (command_suggestion or "").strip()
+    if not raw:
+        return None
+
+    # Ignore pseudo suggestions like "GET http://...".
+    if raw.upper().startswith("GET "):
+        return None
+
+    # Strip markdown fences.
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:bash|sh|python|json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+        raw = raw.strip()
+
+    # Simple hard safety denylists for local runner stability.
+    denied = [
+        "rm -rf /",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        ":(){:|:&};:",
+        "mkfs.",
+        "dd if=/dev/zero",
+    ]
+    low = raw.lower()
+    if any(token in low for token in denied):
+        return None
+
+    if not _is_localhost_command(raw):
+        return None
+
+    # Normalize base URL placeholder and force correlation header where possible.
+    raw = raw.replace("{{BASE_URL}}", base_url).replace("$BASE_URL", base_url)
+    if "curl " in raw and "X-RedTeam-ID" not in raw:
+        raw = raw.replace("curl ", f"curl -H 'X-RedTeam-ID: {attempt_id}' ", 1)
+    if "sqlmap " in raw and "X-RedTeam-ID" not in raw:
+        raw = f"{raw} --headers='X-RedTeam-ID: {attempt_id}'"
+    if "nuclei " in raw and "X-RedTeam-ID" not in raw:
+        raw = raw.replace("nuclei ", f"nuclei -H 'X-RedTeam-ID: {attempt_id}' ", 1)
+
+    return raw
+
+
 def _build_command_for_phase(
     phase: AttackPhase,
     tool: str,
@@ -520,15 +583,18 @@ def run_attack_loop(
                 else:
                     command_tool = "curl"
 
-            # Build and execute the command
-            command_used = _build_command_for_phase(
-                phase=phase,
-                tool=command_tool,
-                base_url=base_url,
-                payload=suggestion.payload,
-                attempt_id=attempt_id,
-                context=context,
-            )
+            # Build and execute the command.
+            # Prefer vetted raw LLM shell commands when available; fallback to deterministic builders.
+            command_used = _maybe_use_llm_command(suggestion.command_suggestion, base_url, attempt_id)
+            if command_used is None:
+                command_used = _build_command_for_phase(
+                    phase=phase,
+                    tool=command_tool,
+                    base_url=base_url,
+                    payload=suggestion.payload,
+                    attempt_id=attempt_id,
+                    context=context,
+                )
 
             exec_result = _run_in_attacker(client, attacker_name, command_used)
             exit_code = int(exec_result["exit_code"])
