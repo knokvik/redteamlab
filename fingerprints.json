@@ -9,11 +9,58 @@
       }
     },
     {
+      "name": "vite-react-ts",
+      "role": "frontend",
+      "match": {
+        "any_files": ["vite.config.ts", "vite.config.mts"],
+        "any_package_deps": ["vite", "react"]
+      }
+    },
+    {
       "name": "nextjs",
       "role": "frontend",
       "match": {
-        "any_files": ["next.config.js", "next.config.mjs"],
+        "any_files": ["next.config.js", "next.config.mjs", "next.config.ts"],
         "any_package_deps": ["next"]
+      }
+    },
+    {
+      "name": "nuxtjs",
+      "role": "frontend",
+      "match": {
+        "any_files": ["nuxt.config.js", "nuxt.config.ts"],
+        "any_package_deps": ["nuxt"]
+      }
+    },
+    {
+      "name": "angular",
+      "role": "frontend",
+      "match": {
+        "all_files": ["angular.json"],
+        "any_package_deps": ["@angular/core"]
+      }
+    },
+    {
+      "name": "svelte",
+      "role": "frontend",
+      "match": {
+        "any_files": ["svelte.config.js", "svelte.config.ts"],
+        "any_package_deps": ["svelte"]
+      }
+    },
+    {
+      "name": "vue",
+      "role": "frontend",
+      "match": {
+        "all_files": ["package.json"],
+        "any_package_deps": ["vue"]
+      }
+    },
+    {
+      "name": "static-html",
+      "role": "frontend",
+      "match": {
+        "any_files": ["index.html"]
       }
     },
     {
@@ -25,25 +72,129 @@
       }
     },
     {
+      "name": "django",
+      "role": "backend",
+      "match": {
+        "any_files": ["manage.py"],
+        "any_text": ["django"]
+      }
+    },
+    {
+      "name": "flask",
+      "role": "backend",
+      "match": {
+        "any_files": ["requirements.txt", "pyproject.toml"],
+        "any_text": ["flask"]
+      }
+    },
+    {
+      "name": "spring-boot",
+      "role": "backend",
+      "match": {
+        "any_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "any_text": ["spring-boot", "springframework"]
+      }
+    },
+    {
+      "name": "rails",
+      "role": "backend",
+      "match": {
+        "all_files": ["Gemfile"],
+        "any_text": ["rails"]
+      }
+    },
+    {
+      "name": "go-backend",
+      "role": "backend",
+      "match": {
+        "all_files": ["go.mod"],
+        "any_text": ["gin-gonic", "gorilla/mux", "echo", "fiber"]
+      }
+    },
+    {
+      "name": "laravel",
+      "role": "backend",
+      "match": {
+        "all_files": ["composer.json", "artisan"],
+        "any_text": ["laravel"]
+      }
+    },
+    {
       "name": "node-backend",
       "role": "backend",
       "match": {
         "all_files": ["package.json"],
-        "any_package_deps": ["express", "fastify", "koa", "nestjs"]
+        "any_package_deps": ["express", "fastify", "koa", "@nestjs/core", "hapi"]
       }
     },
     {
       "name": "postgres",
       "role": "database",
       "match": {
-        "any_text": ["postgres", "postgresql"]
+        "any_text": ["postgres", "postgresql", "pg ", "psycopg"]
       }
     },
     {
       "name": "mysql",
       "role": "database",
       "match": {
-        "any_text": ["mysql", "mariadb"]
+        "any_text": ["mysql", "mariadb", "mysql2"]
+      }
+    },
+    {
+      "name": "mongodb",
+      "role": "database",
+      "match": {
+        "any_text": ["mongodb", "mongoose", "pymongo", "mongoclient"]
+      }
+    },
+    {
+      "name": "redis",
+      "role": "cache",
+      "match": {
+        "any_text": ["redis", "ioredis", "bull", "bullmq"]
+      }
+    },
+    {
+      "name": "sqlite",
+      "role": "database",
+      "match": {
+        "any_text": ["sqlite", "sqlite3", "better-sqlite"]
+      }
+    },
+    {
+      "name": "elasticsearch",
+      "role": "search",
+      "match": {
+        "any_text": ["elasticsearch", "elastic", "opensearch"]
+      }
+    },
+    {
+      "name": "jwt-auth",
+      "role": "auth",
+      "match": {
+        "any_text": ["jsonwebtoken", "jwt", "pyjwt", "jose"]
+      }
+    },
+    {
+      "name": "oauth",
+      "role": "auth",
+      "match": {
+        "any_text": ["oauth", "passport", "next-auth", "auth0"]
+      }
+    },
+    {
+      "name": "graphql",
+      "role": "api",
+      "match": {
+        "any_text": ["graphql", "apollo-server", "type-graphql", "strawberry"]
+      }
+    },
+    {
+      "name": "docker-self",
+      "role": "infra",
+      "match": {
+        "any_files": ["Dockerfile", "docker-compose.yml", "docker-compose.yaml"]
       }
     }
   ]

@@ -25,17 +25,18 @@ x-logging: &loki_logging
       loki-url: "http://10.50.0.201:3100/loki/api/v1/push"
 
 x-attacker-hardening: &attacker_hardening
-  read_only: true
   cap_drop:
     - ALL
   cap_add:
     - NET_ADMIN
     - NET_RAW
+    - SYS_PTRACE
   security_opt:
     - no-new-privileges:true
   tmpfs:
     - /tmp
     - /run
+    - /var/tmp
 
 services:
   attacker:

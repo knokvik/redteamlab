@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DevRedTeam Report - {{ run.repo_name }}</title>
+  <style>
+    :root {
+      --bg: #0f0f14;
+      --card: #1a1a24;
+      --card-border: #2a2a3a;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --accent: #10b981;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+      --info: #3b82f6;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      --glass: rgba(255, 255, 255, 0.04);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .hero {
+      background: linear-gradient(140deg, #0f766e, #0b4f73, #1e1b4b);
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .hero h1 {
+      margin: 0 0 4px;
+      font-size: 28px;
+      letter-spacing: 0.3px;
+      color: #fff;
+    }
+
+    .hero p {
+      margin: 0;
+      opacity: 0.85;
+      color: #94a3b8;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .meta-item {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 13px;
+      color: #cbd5e1;
+    }
+
+    .meta-item strong {
+      color: #e2e8f0;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      color: var(--accent);
+    }
+
+    .card h3 {
+      margin: 8px 0;
+      font-size: 16px;
+      color: #94a3b8;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 7px 14px;
+      border-radius: 999px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .badge-critical {
+      background-color: #7f1d1d;
+    }
+
+    .badge-high {
+      background-color: #b91c1c;
+    }
+
+    .badge-medium {
+      background-color: #b45309;
+    }
+
+    .badge-low {
+      background-color: #15803d;
+    }
+
+    .score-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .chip {
+      border: 1px solid var(--card-border);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      background: var(--glass);
+      color: #94a3b8;
+    }
+
+    .phase-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .phase-recon {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .phase-enumeration {
+      background: rgba(139, 92, 246, 0.15);
+      color: #a78bfa;
+      border-color: rgba(139, 92, 246, 0.3);
+    }
+
+    .phase-vuln_scan {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }
+
+    .phase-exploit {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .phase-post_exploit {
+      background: rgba(220, 38, 38, 0.15);
+      color: #ef4444;
+      border-color: rgba(220, 38, 38, 0.3);
+    }
+
+    .phase-stress_test {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.3);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--card-border);
+      text-align: left;
+      padding: 8px;
+      vertical-align: top;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.03);
+      font-weight: 700;
+      color: #94a3b8;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #0a0a12;
+      color: #94a3b8;
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 250px;
+      overflow: auto;
+      font-size: 12px;
+      border: 1px solid var(--card-border);
+    }
+
+    code {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 4px;
+      padding: 2px 5px;
+      color: #a5b4fc;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 900px) {
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .finding-card {
+      background: rgba(239, 68, 68, 0.05);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+
+    .finding-card .cwe {
+      color: #f87171;
+      font-weight: 700;
+    }
+
+    .finding-card .cvss-vec {
+      color: #94a3b8;
+      font-size: 11px;
+      font-family: monospace;
+    }
+
+    .ok {
+      color: var(--accent);
+    }
+
+    .bad {
+      color: var(--danger);
+    }
+
+    .tiny {
+      font-size: 11px;
+    }
+
+    ul,
+    ol {
+      padding-left: 20px;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <section class="hero">
+      <h1>🛡️ DevRedTeam Simulation Report</h1>
+      <p>Automated red-team kill-chain assessment with behavioral impact analysis</p>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Repository</strong><br />{{ run.repo_url }}</div>
+        <div class="meta-item"><strong>Run Time</strong><br />{{ run.generated_at }}</div>
+        <div class="meta-item"><strong>Mode</strong><br />{{ run.mode | upper }}</div>
+        <div class="meta-item"><strong>Target URL</strong><br />{{ run.target_url }}</div>
+        <div class="meta-item"><strong>All Targets</strong><br />{{ run.target_urls | join(', ') }}</div>
+        <div class="meta-item"><strong>Run ID</strong><br /><span class="tiny">{{ run.run_id }}</span></div>
+        <div class="meta-item"><strong>Stack</strong><br />{{ run.stack_technologies | join(', ') or 'unknown' }}</div>
+        <div class="meta-item"><strong>Phases</strong><br />
+          {% for p in run.phases_executed %}<span class="phase-badge phase-{{ p }}">{{ p }}</span> {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>🎯 CVSS v3.1 Assessment</h2>
+      <div class="score-row">
+        <span class="badge {{ cvss.auto_badge_class }}">CVSS v3.1 {{ cvss.auto_score }}</span>
+        <span class="badge {{ cvss.ebss_badge_class }}">EBSS {{ cvss.ebss }}</span>
+        <span class="badge {{ cvss.badge_class }}">Hybrid {{ cvss.hybrid | round(1) }}</span>
+      </div>
+      <p class="muted"><strong>Auto-detected Vector:</strong> <code>{{ cvss.auto_vector }}</code></p>
+      <p class="muted"><strong>EBSS Formula:</strong> <code>min(Base_CVSS + (Behavior_Severity × 0.5), 10.0) = min({{ cvss.auto_score }} + ({{ cvss.behavior_severity }} × 0.5), 10.0) = {{ cvss.ebss }}</code></p>
+      <p class="muted"><strong>Behavior Tier:</strong> {{ cvss.behavior_severity_label }} ({{ cvss.behavior_severity }}/9)</p>
+
+      <h3>CVSS v3.1 Vector Breakdown</h3>
+      <table>
+        <thead>
+          <tr><th>Metric</th><th>Code</th><th>Value</th><th>Full Name</th></tr>
+        </thead>
+        <tbody>
+          {% for row in cvss.vector_breakdown %}
+          <tr>
+            <td><strong>{{ row.metric }}</strong></td>
+            <td><code>{{ row.value }}</code></td>
+            <td>{{ row.label }}</td>
+            <td class="muted">{{ row.full_name }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if cvss.behavior_signals %}
+      <h3>Behavioral Signals</h3>
+      <ul>
+        {% for signal in cvss.behavior_signals %}
+        <li>{{ signal }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <h3>Legacy Hybrid Score</h3>
+      <div class="score-row">
+        <span class="chip">Base Heuristic: {{ cvss.base | round(1) }}</span>
+        <span class="chip">Behavior Impact: {{ cvss.behavior | round(1) }}</span>
+      </div>
+      <p class="muted">Formula: <code>(base × 0.6) + (behavior × 0.4)</code></p>
+    </section>
+
+    {% if findings %}
+    <section class="card">
+      <h2>🔍 Structured Findings ({{ findings | length }})</h2>
+      {% for f in findings %}
+      <div class="finding-card">
+        <div class="score-row">
+          <span class="cwe">{{ f.cwe_id }} — {{ f.cwe_name }}</span>
+          <span class="badge {{ f.cvss_badge_class }}">{{ f.cvss_score }} {{ f.cvss_severity }}</span>
+          <span class="phase-badge phase-{{ f.phase }}">{{ f.phase }}</span>
+          <span class="chip">{{ f.tool }}</span>
+        </div>
+        <div class="cvss-vec">{{ f.cvss_vector }}</div>
+        <p><strong>Payload:</strong> <code>{{ f.payload }}</code></p>
+        <pre>{{ f.evidence }}</pre>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    <section class="card">
+      <h2>LLM Intelligence Summary</h2>
+      <p><strong>Fallback count:</strong> {{ llm.fallback_count }}</p>
+      <p><strong>Source mix:</strong> {{ llm.source_counts }}</p>
+      <p><strong>Tool mix:</strong> {{ llm.tool_counts }}</p>
+      <pre>{% for line in llm.suggestion_lines %}{{ line }}
+{% endfor %}</pre>
+    </section>
+
+    <section class="card">
+      <h2>Attack Timeline</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Phase</th><th>Timestamp</th><th>Tool</th>
+            <th>Payload</th><th>X-RedTeam-ID</th><th>Status</th>
+            <th>Source</th><th>Impact Window</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in timeline %}
+          <tr>
+            <td>{{ row.attempt }}</td>
+            <td><span class="phase-badge phase-{{ row.phase | default('exploit') }}">{{ row.phase | default('exploit') }}</span></td>
+            <td class="tiny">{{ row.timestamp }}</td>
+            <td><code>{{ row.tool }}</code></td>
+            <td><code>{{ row.payload[:60] }}</code></td>
+            <td><code class="tiny">{{ row.id }}</code></td>
+            <td>{% if row.success %}<span class="ok">✓</span>{% else %}<span class="bad">✗</span>{% endif %}</td>
+            <td class="tiny">{{ row.source }}</td>
+            <td class="tiny">CPU {{ row.impact_window.max_cpu_percent | default(0) }}% / DB {{ row.impact_window.db_latency_max_ms | default('n/a') }} ms / err {{ row.impact_window.error_log_hits | default(0) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    {% if attack_context %}
+    <section class="card">
+      <h2>🎯 Attack Surface Intelligence</h2>
+      <div class="two-col">
+        <div>
+          <h3>Discovered Paths ({{ attack_context.discovered_paths | default([]) | length }})</h3>
+          <pre>{% for p in attack_context.discovered_paths | default([]) %}{{ p }}
+{% endfor %}</pre>
+        </div>
+        <div>
+          <h3>Open Ports</h3>
+          <pre>{{ attack_context.open_ports | default([]) | join(', ') or 'None discovered' }}</pre>
+          <h3>Technologies</h3>
+          <pre>{{ attack_context.technologies | default([]) | join(', ') or 'None detected' }}</pre>
+          <h3>WAF</h3>
+          <pre>{{ attack_context.waf_detected | default('None detected') }}</pre>
+        </div>
+      </div>
+      {% if attack_context.vulnerabilities | default([]) | length > 0 %}
+      <h3>Vulnerabilities Found ({{ attack_context.vulnerabilities | length }})</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Severity</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for v in attack_context.vulnerabilities %}
+          <tr><td>{{ v.type }}</td><td>{{ v.severity }}</td><td class="tiny">{{ v.detail }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="card">
+      <h2>📊 Observed Impact</h2>
+      <p class="muted">Correlated container metrics during attack execution.</p>
+      {{ metrics_chart_html | safe }}
+      <div class="two-col" style="margin-top: 14px;">
+        <div>
+          <h3>Metric Summary</h3>
+          <ul>
+            <li>Max CPU: <strong>{{ impact.max_cpu_percent }}%</strong></li>
+            <li>Avg CPU: <strong>{{ impact.avg_cpu_percent }}%</strong></li>
+            <li>Max Memory: <strong>{{ impact.max_memory_mb }} MB</strong> ({{ impact.max_memory_percent }}%)</li>
+            <li>DB Max Latency: <strong>{{ impact.db_latency_max_ms if impact.db_latency_max_ms is not none else 'n/a' }} ms</strong></li>
+            <li>DB Avg Latency: <strong>{{ impact.db_latency_avg_ms if impact.db_latency_avg_ms is not none else 'n/a' }} ms</strong></li>
+            <li>DB P95 Latency: <strong>{{ impact.db_latency_p95_ms if impact.db_latency_p95_ms is not none else 'n/a' }} ms</strong></li>
+            <li>Error Log Hits: <strong>{{ impact.error_log_hits }}</strong></li>
+            <li>Sensitive Log Hits: <strong>{{ impact.sensitive_log_hits }}</strong></li>
+            <li>Max PIDs: <strong>{{ impact.max_pids }}</strong></li>
+            <li>Disk Read: <strong>{{ (impact.disk_read_bytes / 1048576) | round(2) }} MB</strong></li>
+            <li>Disk Write: <strong>{{ (impact.disk_write_bytes / 1048576) | round(2) }} MB</strong></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Correlated Log Excerpts</h3>
+          <pre>{{ impact.log_excerpt }}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Attack Graph (Before / After)</h2>
+      <div class="two-col">
+        <div><h3>Before</h3>{{ graph_before_html | safe }}</div>
+        <div><h3>After</h3>{{ graph_after_html | safe }}</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>🔧 Prioritized Remediation</h2>
+      <ol>{% for fix in fixes %}<li>{{ fix }}</li>{% endfor %}</ol>
+    </section>
+
+    <section class="card">
+      <h2>🛡️ How to Secure Your System</h2>
+      <div class="two-col">
+        <div>
+          <h3>Input Validation &amp; Injection Prevention</h3>
+          <ul>
+            <li>Use parameterized queries (prepared statements) for all database operations</li>
+            <li>Apply strict input validation with allowlists for all user-controlled parameters</li>
+            <li>Implement Content Security Policy (CSP) headers to mitigate XSS</li>
+            <li>Use template engines with auto-escaping enabled to prevent SSTI</li>
+          </ul>
+          <h3>Authentication &amp; Access Control</h3>
+          <ul>
+            <li>Enforce MFA for all administrative accounts</li>
+            <li>Implement rate limiting on authentication endpoints</li>
+            <li>Use secure session management with HttpOnly and Secure cookie flags</li>
+            <li>Apply the principle of least privilege to all service accounts</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Infrastructure Hardening</h3>
+          <ul>
+            <li>Deploy a Web Application Firewall (WAF) with OWASP CRS rules</li>
+            <li>Configure resource limits (CPU/memory) for all containers</li>
+            <li>Disable verbose error messages and stack traces in production</li>
+            <li>Implement network segmentation between application and data tiers</li>
+          </ul>
+          <h3>Monitoring &amp; Response</h3>
+          <ul>
+            <li>Set up anomaly detection for CPU/memory spikes correlated with request patterns</li>
+            <li>Monitor for sensitive data exposure in application logs</li>
+            <li>Implement automated alerting for repeated failed authentication attempts</li>
+            <li>Establish an incident response plan for detected exploitation attempts</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Run Artifacts</h2>
+      <p>All traceability artifacts are stored in:</p>
+      <p><code>{{ run.report_dir }}</code></p>
+      <p class="muted tiny">timeline.json • observability.json • graph_before.json • graph_after.json • findings.json
+      </p>
+    </section>
+  </div>
+</body>
+
+</html>

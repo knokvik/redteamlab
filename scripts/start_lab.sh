@@ -20,8 +20,9 @@ fi
 
 echo "Starting DevRedTeam lab stack..."
 if [[ -n "${TARGET_REPO_URL}" ]]; then
-  if python3 -c 'import docker, yaml, rich, git' >/dev/null 2>&1; then
-    python3 "${PROJECT_ROOT}/cli.py" run "${TARGET_REPO_URL}" --project-name "${PROJECT_NAME}"
+  shift || true
+  if python3 -c 'import docker, yaml, rich, git, requests, networkx, playwright, jinja2' >/dev/null 2>&1; then
+    python3 "${PROJECT_ROOT}/cli.py" run "${TARGET_REPO_URL}" --project-name "${PROJECT_NAME}" "$@"
     exit $?
   fi
 

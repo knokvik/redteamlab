@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -12,6 +15,11 @@ import docker
 import yaml
 from rich.console import Console
 from rich.table import Table
+
+from core.attack_orchestrator import run_attack_loop
+from core.observability import ObservabilityCollector
+from core.playwright_crawler import crawl_and_build_graph, discover_target_urls, select_primary_target_url
+from core.report_generator import generate_report
 
 console = Console()
 
@@ -53,15 +61,44 @@ def resolve_container_name(project: str, service_name: str, service_cfg: Dict) -
     return f"{project}-{service_name}-1"
 
 
-def compose_up(compose_files: List[Path], project_name: str) -> None:
+def _print_build_failure_help(project_name: str, build_images: bool) -> None:
+    if build_images:
+        console.print(
+            "[yellow]Docker image build failed. If you see Buildx permission issues, try:[/yellow]\n"
+            "  [cyan]docker builder prune -af[/cyan]\n"
+            "  [cyan]rm -rf ~/.docker/buildx[/cyan]\n"
+            f"  [cyan]python3 cli.py run <repo-url> --project-name {project_name}[/cyan]\n"
+            "Or skip image rebuild if images already exist:\n"
+            f"  [cyan]python3 cli.py run <repo-url> --project-name {project_name} --no-build[/cyan]"
+        )
+    else:
+        console.print(
+            "[yellow]Compose startup failed in --no-build mode. If images are missing, rerun without --no-build.[/yellow]"
+        )
+
+
+def compose_up(compose_files: List[Path], project_name: str, build_images: bool = True) -> bool:
     console.print("[bold cyan]Bringing up lab stack with docker compose...[/bold cyan]")
 
     cmd = ["docker", "compose", "-p", project_name]
     for compose_file in compose_files:
         cmd.extend(["-f", str(compose_file)])
-    cmd.extend(["up", "-d", "--build", "--remove-orphans"])
+    cmd.extend(["up", "-d", "--remove-orphans"])
+    if build_images:
+        cmd.append("--build")
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True
+    except subprocess.CalledProcessError as exc:
+        output = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+        lowered = output.lower()
+        if "buildx" in lowered or "operation not permitted" in lowered:
+            console.print("[red]Docker Buildx permission issue detected during compose startup.[/red]")
+        else:
+            console.print("[red]docker compose up failed.[/red]")
+        _print_build_failure_help(project_name=project_name, build_images=build_images)
+        return False
 
 
 def ensure_running(client: docker.DockerClient, container_name: str) -> docker.models.containers.Container:
@@ -126,7 +163,12 @@ def run_connectivity_checks(
     return failures
 
 
-def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", skip_compose_up: bool = False) -> int:
+def run_lab(
+    compose_files: List[Path | str],
+    project_name: str = "devredteam",
+    skip_compose_up: bool = False,
+    build_images: bool = True,
+) -> int:
     resolved_compose_files = [Path(path).resolve() for path in compose_files]
 
     for compose_file in resolved_compose_files:
@@ -141,7 +183,9 @@ def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", s
         return 1
 
     if not skip_compose_up:
-        compose_up(resolved_compose_files, project_name)
+        started = compose_up(resolved_compose_files, project_name, build_images=build_images)
+        if not started:
+            return 1
 
     client = docker.from_env()
     attacker_container_name = resolve_container_name(project_name, "attacker", services["attacker"])
@@ -165,6 +209,127 @@ def run_lab(compose_files: List[Path | str], project_name: str = "devredteam", s
 
     console.print("[bold green]Lab is up. Attacker can reach target services.[/bold green]")
     return 0
+
+
+def run_attack_intelligence_pipeline(
+    compose_file: Path | str,
+    project_name: str = "devredteam",
+    reports_dir: Path | str | None = None,
+    attempts: int = 4,
+    mode: str = "safe",
+    repo_url: str = "",
+    repo_name: str = "",
+    stack_snapshot: Dict | None = None,
+) -> Dict:
+    compose_path = Path(compose_file).resolve()
+    report_dir = Path(reports_dir) if reports_dir else Path(__file__).resolve().parents[1] / "reports"
+    repo_slug = repo_name or re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1]) or "repo"
+
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
+    stack_snapshot = stack_snapshot or {}
+    discovered_targets = discover_target_urls(compose_path)
+    target_urls = [item.url for item in discovered_targets]
+    if not target_urls:
+        target_urls = ["http://localhost:9700"]
+    base_url = select_primary_target_url(compose_path)
+    console.print(f"[bold cyan]Playwright target URL:[/bold cyan] {base_url}")
+
+    try:
+        crawl_result = crawl_and_build_graph(base_url=base_url, run_id=run_id)
+    except Exception as exc:
+        crawl_result = {
+            "run_id": run_id,
+            "base_url": base_url,
+            "error": f"crawler failure: {exc}",
+            "flows": [],
+            "endpoints": [],
+            "graph": {"nodes": [], "edges": []},
+        }
+
+    db_info = stack_snapshot.get("database", {}) if isinstance(stack_snapshot, dict) else {}
+    db_type = db_info.get("type") if isinstance(db_info, dict) else None
+    collector = ObservabilityCollector(
+        project_name=project_name,
+        sample_interval_s=2,
+        db_type=db_type,
+        db_service_name="target-db",
+    )
+    collector.start()
+    try:
+        try:
+            attack_result = run_attack_loop(
+                base_url=base_url,
+                graph_snapshot=crawl_result.get("graph", {}),
+                observability_collector=collector,
+                project_name=project_name,
+                attempts=attempts,
+                mode=mode,
+                stack_snapshot=stack_snapshot,
+                target_urls=target_urls,
+            )
+        except Exception as exc:
+            attack_result = {
+                "attempts": [],
+                "fallback_used": True,
+                "error": f"attack loop failure: {exc}",
+            }
+    finally:
+        try:
+            observability_result = collector.stop()
+        except Exception as exc:
+            observability_result = {"samples": [], "summary": {}, "error": str(exc)}
+
+    try:
+        report_result = generate_report(
+            output_root=report_dir,
+            repo_name=repo_slug,
+            repo_url=repo_url or "n/a",
+            mode=mode,
+            run_id=run_id,
+            target_url=base_url,
+            target_urls=target_urls,
+            stack_snapshot=stack_snapshot,
+            crawl_result=crawl_result,
+            attack_result=attack_result,
+            observability_result=observability_result,
+            compose_file=str(compose_path),
+        )
+    except Exception as exc:
+        fallback_dir = report_dir / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{repo_slug}"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_file = fallback_dir / "index.html"
+        fallback_file.write_text(
+            (
+                "<html><body><h1>DevRedTeam Report (Fallback)</h1>"
+                f"<p>Run ID: {run_id}</p>"
+                f"<p>Target: {base_url}</p>"
+                f"<p>Mode: {mode}</p>"
+                f"<p>Report generation error: {exc}</p>"
+                "</body></html>"
+            ),
+            encoding="utf-8",
+        )
+        report_result = {
+            "report_path": str(fallback_file),
+            "report_dir": str(fallback_dir),
+            "base_cvss": 0.0,
+            "behavior_impact": 0.0,
+            "hybrid_cvss": 0.0,
+            "error": str(exc),
+        }
+
+    return {
+        "run_id": run_id,
+        "target_url": base_url,
+        "target_urls": target_urls,
+        "stack": stack_snapshot,
+        "crawl": crawl_result,
+        "attacks": attack_result,
+        "observability": observability_result,
+        "report": report_result,
+        "mode": mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def main() -> int:

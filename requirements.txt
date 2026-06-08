@@ -3,3 +3,8 @@ pyyaml
 rich
 gitpython
 jinja2
+playwright
+networkx
+cvss
+plotly
+requests
